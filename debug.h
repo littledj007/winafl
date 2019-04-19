@@ -30,6 +30,10 @@
 #include "types.h"
 #include "config.h"
 
+#ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
+#define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
+#endif
+
 /*******************
  * Terminal colors *
  *******************/
@@ -43,7 +47,7 @@
 #  define cBLU "\x1b[0;34m"
 #  define cMGN "\x1b[0;35m"
 #  define cCYA "\x1b[0;36m"
-#  define cNOR "\x1b[0;37m"
+#  define cLGR "\x1b[0;37m"
 #  define cGRA "\x1b[1;30m"
 #  define cLRD "\x1b[1;31m"
 #  define cLGN "\x1b[1;32m"
@@ -54,6 +58,23 @@
 #  define cBRI "\x1b[1;37m"
 #  define cRST "\x1b[0m"
 
+#  define bgBLK "\x1b[40m"
+#  define bgRED "\x1b[41m"
+#  define bgGRN "\x1b[42m"
+#  define bgBRN "\x1b[43m"
+#  define bgBLU "\x1b[44m"
+#  define bgMGN "\x1b[45m"
+#  define bgCYA "\x1b[46m"
+#  define bgLGR "\x1b[47m"
+#  define bgGRA "\x1b[100m"
+#  define bgLRD "\x1b[101m"
+#  define bgLGN "\x1b[102m"
+#  define bgYEL "\x1b[103m"
+#  define bgLBL "\x1b[104m"
+#  define bgPIN "\x1b[105m"
+#  define bgLCY "\x1b[106m"
+#  define bgBRI "\x1b[107m"
+
 #else
 
 #  define cBLK ""
@@ -63,7 +84,7 @@
 #  define cBLU ""
 #  define cMGN ""
 #  define cCYA ""
-#  define cNOR ""
+#  define cLGR ""
 #  define cGRA ""
 #  define cLRD ""
 #  define cLGN ""
@@ -73,6 +94,23 @@
 #  define cLCY ""
 #  define cBRI ""
 #  define cRST ""
+
+#  define bgBLK ""
+#  define bgRED ""
+#  define bgGRN ""
+#  define bgBRN ""
+#  define bgBLU ""
+#  define bgMGN ""
+#  define bgCYA ""
+#  define bgLGR ""
+#  define bgGRA ""
+#  define bgLRD ""
+#  define bgLGN ""
+#  define bgYEL ""
+#  define bgLBL ""
+#  define bgPIN ""
+#  define bgLCY ""
+#  define bgBRI ""
 
 #endif /* ^USE_COLOR */
 
@@ -122,17 +160,23 @@
  * Misc terminal codes *
  ***********************/
 
-//#define TERM_HOME     "\x1b[H"
-//#define TERM_CLEAR    TERM_HOME "\x1b[2J"
-//#define cEOL          "\x1b[0K"
-//#define CURSOR_HIDE   "\x1b[?25l"
-//#define CURSOR_SHOW   "\x1b[?25h"
+#ifdef USE_COLOR
+
+#define TERM_HOME     "\x1b[H"
+#define TERM_CLEAR    TERM_HOME "\x1b[2J"
+#define cEOL          "\x1b[0K"
+#define CURSOR_HIDE   "\x1b[?25l"
+#define CURSOR_SHOW   "\x1b[?25h"
+
+#else
 
 #define TERM_HOME     ""
 #define TERM_CLEAR    ""
 #define cEOL          ""
 #define CURSOR_HIDE   ""
 #define CURSOR_SHOW   ""
+
+#endif /* ^USE_COLORS */
 
 /************************
  * Debug & error macros *
@@ -224,5 +268,24 @@
     s32 _res = _read(fd, buf, _len); \
     if (_res != _len) RPFATAL(_res, "Short read from %s", fn); \
   } while (0)
+
+
+static void enable_ansi_console(void) {
+  // Set output mode to handle virtual terminal sequences
+  DWORD mode = 0;
+  HANDLE console_handle = GetStdHandle(STD_OUTPUT_HANDLE);
+  if (console_handle == INVALID_HANDLE_VALUE) {
+    return;
+  }
+
+  if (!GetConsoleMode(console_handle, &mode)) {
+    return;
+  }
+
+  mode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+  // Ignore errors
+  SetConsoleMode(console_handle, mode);
+}
+
 
 #endif /* ! _HAVE_DEBUG_H */

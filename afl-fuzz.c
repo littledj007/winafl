@@ -21,7 +21,6 @@
    limitations under the License.
 
  */
-
 #define _CRT_SECURE_NO_WARNINGS
 
 #define AFL_MAIN
@@ -30,14 +29,17 @@
 #define _GNU_SOURCE
 #define _FILE_OFFSET_BITS 64
 
+#define WIN32_LEAN_AND_MEAN /* prevent winsock.h to be included in windows.h */
+
 #define _CRT_RAND_S
 #include <windows.h>
+#include <TlHelp32.h>
 #include <stdarg.h>
 #include <io.h>
 #include <direct.h>
 
-#define VERSION "1.96b"
-#define WINAFL_VERSION "1.08"
+#define VERSION "2.43b"
+#define WINAFL_VERSION "1.16b"
 
 #include "config.h"
 #include "types.h"
@@ -61,7 +63,6 @@
 #  include <sys/sysctl.h>
 #endif /* __APPLE__ || __FreeBSD__ || __OpenBSD__ */
 
-
 /* Lots of globals, but mostly for the status UI and other things where it
    really makes no sense to haul them around as function parameters. */
 
@@ -77,8 +78,12 @@ static u8 *in_dir,                    /* Input directory with test cases  */
           *target_cmd,                /* command line of target           */
           *orig_cmdline;              /* Original command line            */
 
+
 static u32 exec_tmout = EXEC_TIMEOUT; /* Configurable exec timeout (ms)   */
-static u64 mem_limit = MEM_LIMIT;     /* Memory cap for child (MB)        */
+static u32 init_tmout = 0;            /* Configurable init timeout (ms)   */
+static u32 hang_tmout = EXEC_TIMEOUT; /* Timeout used for hang det (ms)   */
+
+u64 mem_limit  = MEM_LIMIT;           /* Memory cap for child (MB)        */
 
 static u32 stats_update_freq = 1;     /* Stats update frequency (execs)   */
 
@@ -98,12 +103,17 @@ static u8  skip_deterministic,        /* Skip deterministic stages?       */
            in_place_resume,           /* Attempt in-place resume?         */
            auto_changed,              /* Auto-generated tokens changed?   */
            no_cpu_meter_red,          /* Feng shui on the status screen   */
-           no_var_check,              /* Don't detect variable behavior   */
+           no_arith,                  /* Skip most arithmetic ops         */
            shuffle_queue,             /* Shuffle input queue?             */
            bitmap_changed = 1,        /* Time to update bitmap?           */
            qemu_mode,                 /* Running in QEMU mode?            */
            skip_requested,            /* Skip request, via SIGUSR1        */
-           run_over10m;               /* Run time over 10 minutes?        */
+           run_over10m,               /* Run time over 10 minutes?        */
+           persistent_mode,           /* Running in persistent mode?      */
+	       drioless = 0;              /* Running without DRIO?            */
+           use_intelpt = 0;           /* Running without DRIO?            */
+           custom_dll_defined = 0;    /* Custom DLL path defined ?        */
+           persist_dr_cache = 0;      /* Custom DLL path defined ?        */
 
 static s32 out_fd,                    /* Persistent fd for out_file       */
            dev_urandom_fd = -1,       /* Persistent fd for /dev/urandom   */
@@ -117,24 +127,28 @@ static s32 out_fd,                    /* Persistent fd for out_file       */
 HANDLE child_handle, child_thread_handle;
 char *dynamorio_dir;
 char *client_params;
-int fuzz_iterations_max, fuzz_iterations_current;
+int fuzz_iterations_max = 5000, fuzz_iterations_current;
 
 CRITICAL_SECTION critical_section;
 u64 watchdog_timeout_time;
 int watchdog_enabled;
 
-static u8* trace_bits;                /* SHM with instrumentation bitmap  */
+u8* trace_bits;                       /* SHM with instrumentation bitmap  */
 
 static u8  virgin_bits[MAP_SIZE],     /* Regions yet untouched by fuzzing */
-           virgin_hang[MAP_SIZE],     /* Bits we haven't seen in hangs    */
+           virgin_tmout[MAP_SIZE],    /* Bits we haven't seen in tmouts   */
            virgin_crash[MAP_SIZE];    /* Bits we haven't seen in crashes  */
+
+static u8  var_bytes[MAP_SIZE];       /* Bytes that appear to be variable */
 
 static HANDLE shm_handle;             /* Handle of the SHM region         */
 static HANDLE pipe_handle;            /* Handle of the name pipe          */
+static OVERLAPPED pipe_overlapped;    /* Overlapped structure of pipe     */
+
 static char   *fuzzer_id = NULL;      /* The fuzzer ID or a randomized 
                                          seed allowing multiple instances */
 static HANDLE devnul_handle;          /* Handle of the nul device         */
-static u8     sinkhole_stds = 1;      /* Sink-hole stdout/stderr messages?*/
+u8     sinkhole_stds = 1;             /* Sink-hole stdout/stderr messages?*/
 
 static volatile u8 stop_soon,         /* Ctrl-C pressed?                  */
                    clear_screen = 1,  /* Window resized?                  */
@@ -153,18 +167,21 @@ static u32 queued_paths,              /* Total number of queued testcases */
            cur_depth,                 /* Current path depth               */
            max_depth,                 /* Max path depth                   */
            useless_at_start,          /* Number of useless starting paths */
+           var_byte_count,            /* Bitmap bytes with var behavior   */
            current_entry,             /* Current queue entry ID           */
            havoc_div = 1;             /* Cycle count divisor for havoc    */
 
 static u64 total_crashes,             /* Total number of crashes          */
            unique_crashes,            /* Crashes with unique signatures   */
-           total_hangs,               /* Total number of hangs            */
+           total_tmouts,              /* Total number of timeouts         */
+           unique_tmouts,             /* Timeouts with unique signatures  */
            unique_hangs,              /* Hangs with unique signatures     */
            total_execs,               /* Total execve() calls             */
            start_time,                /* Unix start time (ms)             */
            last_path_time,            /* Time for most recent path (ms)   */
            last_crash_time,           /* Time for most recent crash (ms)  */
            last_hang_time,            /* Time for most recent hang (ms)   */
+           last_crash_execs,          /* Exec counter at last crash       */
            queue_cycle,               /* Queue round counter              */
            cycles_wo_finds,           /* Cycles without any new paths     */
            trim_execs,                /* Execs done to trim input files   */
@@ -173,7 +190,7 @@ static u64 total_crashes,             /* Total number of crashes          */
            blocks_eff_total,          /* Blocks subject to effector maps  */
            blocks_eff_select;         /* Blocks selected as fuzzable      */
 
-static u32 subseq_hangs;              /* Number of hangs in a row         */
+static u32 subseq_tmouts;             /* Number of timeouts in a row      */
 
 static u8 *stage_name = "init",       /* Name of the current fuzz stage   */
           *stage_short,               /* Short stage name                 */
@@ -181,6 +198,8 @@ static u8 *stage_name = "init",       /* Name of the current fuzz stage   */
 
 static s32 stage_cur, stage_max;      /* Stage progression                */
 static s32 splicing_with = -1;        /* Splicing with which test case?   */
+
+static u32 master_id, master_max;     /* Master instance job splitting    */
 
 static u32 syncing_case;              /* Syncing with case #...           */
 
@@ -201,6 +220,8 @@ static u64 total_bitmap_size,         /* Total bit count for all bitmaps  */
            total_bitmap_entries;      /* Number of bitmaps counted        */
 
 static u32 cpu_core_count;            /* CPU core count                   */
+
+u64 cpu_aff = 0;       	              /* Selected CPU core                */
 
 static FILE* plot_file;               /* Gnuplot output file              */
 
@@ -295,7 +316,7 @@ enum {
 
 enum {
   /* 00 */ FAULT_NONE,
-  /* 01 */ FAULT_HANG,
+  /* 01 */ FAULT_TMOUT,
   /* 02 */ FAULT_CRASH,
   /* 03 */ FAULT_ERROR,
   /* 04 */ FAULT_NOINST,
@@ -303,9 +324,10 @@ enum {
 };
 
 
+
 /* Get unix time in milliseconds */
 
-static u64 get_cur_time(void) {
+u64 get_cur_time(void) {
 
   u64 ret;
   FILETIME filetime;
@@ -342,8 +364,8 @@ static inline u32 UR(u32 limit) {
 
     u32 seed[2];
 
-	rand_s(&seed[0]);
-	rand_s(&seed[1]);
+    rand_s(&seed[0]);
+    rand_s(&seed[1]);
 
     srand(seed[0]);
     rand_cnt = (RESEED_RNG / 2) + (seed[1] % RESEED_RNG);
@@ -370,6 +392,147 @@ static void shuffle_ptrs(void** ptrs, u32 cnt) {
 
   }
 
+}
+
+
+static u64 get_process_affinity(u32 process_id) {
+
+  /* if we can't get process affinity we treat it as if he doesn't have affinity */
+  u64 affinity = -1ULL;
+  DWORD_PTR process_affinity_mask = 0;
+  DWORD_PTR system_affinity_mask = 0;
+
+  HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process_id);
+  if (process == NULL) {
+    return affinity;
+  }
+
+  if (GetProcessAffinityMask(process, &process_affinity_mask, &system_affinity_mask)) {
+    affinity = (u64)process_affinity_mask;
+  }
+
+  CloseHandle(process);
+
+  return affinity;
+}
+
+static u32 count_mask_bits(u64 mask) {
+
+  u32 count = 0;
+
+  while (mask) {
+    if (mask & 1) {
+      count++;
+    }
+    mask >>= 1;
+  }
+
+  return count;
+}
+
+static u32 get_bit_idx(u64 mask) {
+
+  u32 i;
+	
+  for (i = 0; i < 64; i++) {
+    if (mask & (1ULL << i)) {
+      return i;
+    }
+  }
+
+  return 0;
+}
+
+static void bind_to_free_cpu(void) {
+
+  u8 cpu_used[64];
+  u32 i = 0;
+  PROCESSENTRY32 process_entry;
+  HANDLE process_snap = INVALID_HANDLE_VALUE;
+
+  memset(cpu_used, 0, sizeof(cpu_used));
+
+  if (cpu_core_count < 2) return;
+
+  /* Currently winafl doesn't support more than 64 cores */
+  if (cpu_core_count > 64) {
+    SAYF("\n" cLRD "[-] " cRST
+    "Uh-oh, looks like you have %u CPU cores on your system\n"
+    "    winafl doesn't support more than 64 cores at the momement\n"
+    "    you can set AFL_NO_AFFINITY and try again.\n",
+    cpu_core_count);
+    FATAL("Too many cpus for automatic binding");
+  }
+
+  if (getenv("AFL_NO_AFFINITY")) {
+
+    WARNF("Not binding to a CPU core (AFL_NO_AFFINITY set).");
+    return;
+  }
+
+  if (!cpu_aff) {
+    ACTF("Checking CPU core loadout...");
+
+    /* Introduce some jitter, in case multiple AFL tasks are doing the same
+    thing at the same time... */
+
+    srand(GetTickCount() + GetCurrentProcessId());
+    Sleep(R(1000) * 3);
+
+    process_snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (process_snap == INVALID_HANDLE_VALUE) {
+      FATAL("Failed to create snapshot");
+    }
+
+    process_entry.dwSize = sizeof(PROCESSENTRY32);
+    if (!Process32First(process_snap, &process_entry)) {
+      CloseHandle(process_snap);
+      FATAL("Failed to enumerate processes");
+    }
+
+    do {
+      unsigned long cpu_idx = 0;
+      u64 affinity = get_process_affinity(process_entry.th32ProcessID);
+
+      if ((affinity == 0) || (count_mask_bits(affinity) > 1)) continue;
+
+      cpu_idx = get_bit_idx(affinity);
+      cpu_used[cpu_idx] = 1;
+    } while (Process32Next(process_snap, &process_entry));
+
+    CloseHandle(process_snap);
+
+    /* If the user only uses subset of the core, prefer non-sequential cores
+       to avoid pinning two hyper threads of the same core */
+    for(i = 0; i < cpu_core_count; i += 2) if (!cpu_used[i]) break;
+
+    /* Fallback to the sequential scan */
+    if (i >= cpu_core_count) {
+      for(i = 0; i < cpu_core_count; i++) if (!cpu_used[i]) break;
+    }
+
+    if (i == cpu_core_count) {
+      SAYF("\n" cLRD "[-] " cRST
+      "Uh-oh, looks like all %u CPU cores on your system are allocated to\n"
+      "    other instances of afl-fuzz (or similar CPU-locked tasks). Starting\n"
+      "    another fuzzer on this machine is probably a bad plan, but if you are\n"
+      "    absolutely sure, you can set AFL_NO_AFFINITY and try again.\n",
+      cpu_core_count);
+
+      FATAL("No more free CPU cores");
+
+    }
+
+    OKF("Found a free CPU core, binding to #%u.", i);
+
+    cpu_aff = 1ULL << i;
+  }
+
+  if (!SetProcessAffinityMask(GetCurrentProcess(), (DWORD_PTR)cpu_aff)) {
+    FATAL("Failed to set process affinity");
+  }
+
+  OKF("Process affinity is set to %I64x.\n", cpu_aff);
 }
 
 
@@ -748,12 +911,10 @@ static void read_bitmap(u8* fname) {
    This function is called after every exec() on a fairly large buffer, so
    it needs to be fast. We do this in 32-bit and 64-bit flavors. */
 
-#define FFL(_b) (0xffULL << ((_b) << 3))
-#define FF(_b)  (0xff << ((_b) << 3))
-
 static inline u8 has_new_bits(u8* virgin_map) {
 
-#ifdef __x86_64__
+
+#ifdef _WIN64
 
   u64* current = (u64*)trace_bits;
   u64* virgin  = (u64*)virgin_map;
@@ -767,59 +928,45 @@ static inline u8 has_new_bits(u8* virgin_map) {
 
   u32  i = (MAP_SIZE >> 2);
 
-#endif /* ^__x86_64__ */
+#endif /* ^_WIN64 */
 
   u8   ret = 0;
 
   while (i--) {
 
-#ifdef __x86_64__
+    /* Optimize for (*current & *virgin) == 0 - i.e., no bits in current bitmap
+       that have not been already cleared from the virgin map - since this will
+       almost always be the case. */
 
-    u64 cur = *current;
-    u64 vir = *virgin;
-
-#else
-
-    u32 cur = *current;
-    u32 vir = *virgin;
-
-#endif /* ^__x86_64__ */
-
-    /* Optimize for *current == ~*virgin, since this will almost always be the
-       case. */
-
-    if (cur & vir) {
+    if (*current && (*current & *virgin)) {
 
       if (ret < 2) {
 
-        /* This trace did not have any new bytes yet; see if there's any
-           current[] byte that is non-zero when virgin[] is 0xff. */
+        u8* cur = (u8*)current;
+        u8* vir = (u8*)virgin;
 
-#ifdef __x86_64__
+        /* Looks like we have not found any new bytes yet; see if any non-zero
+           bytes in current[] are pristine in virgin[]. */
 
-        if (((cur & FFL(0)) && (vir & FFL(0)) == FFL(0)) ||
-            ((cur & FFL(1)) && (vir & FFL(1)) == FFL(1)) ||
-            ((cur & FFL(2)) && (vir & FFL(2)) == FFL(2)) ||
-            ((cur & FFL(3)) && (vir & FFL(3)) == FFL(3)) ||
-            ((cur & FFL(4)) && (vir & FFL(4)) == FFL(4)) ||
-            ((cur & FFL(5)) && (vir & FFL(5)) == FFL(5)) ||
-            ((cur & FFL(6)) && (vir & FFL(6)) == FFL(6)) ||
-            ((cur & FFL(7)) && (vir & FFL(7)) == FFL(7))) ret = 2;
+#ifdef _WIN64
+
+        if ((cur[0] && vir[0] == 0xff) || (cur[1] && vir[1] == 0xff) ||
+            (cur[2] && vir[2] == 0xff) || (cur[3] && vir[3] == 0xff) ||
+            (cur[4] && vir[4] == 0xff) || (cur[5] && vir[5] == 0xff) ||
+            (cur[6] && vir[6] == 0xff) || (cur[7] && vir[7] == 0xff)) ret = 2;
         else ret = 1;
 
 #else
 
-        if (((cur & FF(0)) && (vir & FF(0)) == FF(0)) ||
-            ((cur & FF(1)) && (vir & FF(1)) == FF(1)) ||
-            ((cur & FF(2)) && (vir & FF(2)) == FF(2)) ||
-            ((cur & FF(3)) && (vir & FF(3)) == FF(3))) ret = 2;
+        if ((cur[0] && vir[0] == 0xff) || (cur[1] && vir[1] == 0xff) ||
+            (cur[2] && vir[2] == 0xff) || (cur[3] && vir[3] == 0xff)) ret = 2;
         else ret = 1;
 
-#endif /* ^__x86_64__ */
+#endif /* ^_WIN64 */
 
       }
 
-      *virgin = vir & ~cur;
+      *virgin &= ~*current;
 
     }
 
@@ -866,6 +1013,7 @@ static u32 count_bits(u8* mem) {
 
 }
 
+#define FF(_b)  (0xff << ((_b) << 3))
 
 /* Count the number of bytes set in the bitmap. Called fairly sporadically,
    mostly to update the status screen or calibrate and examine confirmed
@@ -925,7 +1073,7 @@ static u32 count_non_255_bytes(u8* mem) {
 
 /* Destructively simplify trace by eliminating hit count information
    and replacing it with 0x80 or 0x01 depending on whether the tuple
-   is hit or not. Called on every new crash or hang, should be
+   is hit or not. Called on every new crash or timeout, should be
    reasonably fast. */
 
 #define AREP4(_sym)   (_sym), (_sym), (_sym), (_sym)
@@ -935,7 +1083,8 @@ static u32 count_non_255_bytes(u8* mem) {
 #define AREP64(_sym)  AREP32(_sym), AREP32(_sym)
 #define AREP128(_sym) AREP64(_sym), AREP64(_sym)
 
-static u8 simplify_lookup[256] = { 
+static const u8 simplify_lookup[256] = {
+
   /*    4 */ 1, 128, 128, 128,
   /*   +4 */ AREP4(128),
   /*   +8 */ AREP8(128),
@@ -943,9 +1092,10 @@ static u8 simplify_lookup[256] = {
   /*  +32 */ AREP32(128),
   /*  +64 */ AREP64(128),
   /* +128 */ AREP128(128)
+
 };
 
-#ifdef __x86_64__
+#ifdef _WIN64
 
 static void simplify_trace(u64* mem) {
 
@@ -1002,14 +1152,14 @@ static void simplify_trace(u32* mem) {
 
 }
 
-#endif /* ^__x86_64__ */
+#endif /* ^_WIN64 */
 
 
 /* Destructively classify execution counts in a trace. This is used as a
    preprocessing step for any newly acquired traces. Called on every exec,
    must be fast. */
 
-static u8 count_class_lookup[256] = {
+static const u8 count_class_lookup8[256] = {
 
   /* 0 - 3:       4 */ 0, 1, 2, 4,
   /* 4 - 7:      +4 */ AREP4(8),
@@ -1020,7 +1170,23 @@ static u8 count_class_lookup[256] = {
 
 };
 
-#ifdef __x86_64__
+static u16 count_class_lookup16[65536];
+
+
+static void init_count_class16(void) {
+
+  u32 b1, b2;
+
+  for (b1 = 0; b1 < 256; b1++)
+    for (b2 = 0; b2 < 256; b2++)
+      count_class_lookup16[(b1 << 8) + b2] =
+        (count_class_lookup8[b1] << 8) |
+        count_class_lookup8[b2];
+
+}
+
+
+#ifdef _WIN64
 
 static inline void classify_counts(u64* mem) {
 
@@ -1032,16 +1198,12 @@ static inline void classify_counts(u64* mem) {
 
     if (*mem) {
 
-      u8* mem8 = (u8*)mem;
+      u16* mem16 = (u16*)mem;
 
-      mem8[0] = count_class_lookup[mem8[0]];
-      mem8[1] = count_class_lookup[mem8[1]];
-      mem8[2] = count_class_lookup[mem8[2]];
-      mem8[3] = count_class_lookup[mem8[3]];
-      mem8[4] = count_class_lookup[mem8[4]];
-      mem8[5] = count_class_lookup[mem8[5]];
-      mem8[6] = count_class_lookup[mem8[6]];
-      mem8[7] = count_class_lookup[mem8[7]];
+      mem16[0] = count_class_lookup16[mem16[0]];
+      mem16[1] = count_class_lookup16[mem16[1]];
+      mem16[2] = count_class_lookup16[mem16[2]];
+      mem16[3] = count_class_lookup16[mem16[3]];
 
     }
 
@@ -1063,12 +1225,10 @@ static inline void classify_counts(u32* mem) {
 
     if (*mem) {
 
-      u8* mem8 = (u8*)mem;
+      u16* mem16 = (u16*)mem;
 
-      mem8[0] = count_class_lookup[mem8[0]];
-      mem8[1] = count_class_lookup[mem8[1]];
-      mem8[2] = count_class_lookup[mem8[2]];
-      mem8[3] = count_class_lookup[mem8[3]];
+      mem16[0] = count_class_lookup16[mem16[0]];
+      mem16[1] = count_class_lookup16[mem16[1]];
 
     }
 
@@ -1078,7 +1238,7 @@ static inline void classify_counts(u32* mem) {
 
 }
 
-#endif /* ^__x86_64__ */
+#endif /* ^_WIN64 */
 
 
 /* Get rid of shared memory (atexit handler). */
@@ -1232,11 +1392,6 @@ static void setup_shm(void) {
   u64 name_seed;
   u8 attempts = 0;
 
-  if (!in_bitmap) memset(virgin_bits, 255, MAP_SIZE);
-
-  memset(virgin_hang, 255, MAP_SIZE);
-  memset(virgin_crash, 255, MAP_SIZE);
-
   while(attempts < 5) {
     if(fuzzer_id == NULL) {
       // If it is null, it means we have to generate a random seed to name the instance
@@ -1298,10 +1453,29 @@ static void setup_shm(void) {
 
 }
 
+char* dlerror(){
+    static char msg[1024] = {0};
+    DWORD errCode = GetLastError();
+    FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM, NULL, errCode, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPSTR) msg, sizeof(msg)/sizeof(msg[0]), NULL);
+    return msg;
+}
 /* Load postprocessor, if available. */
 
 static void setup_post(void) {
-  //not implemented on Windows
+    HMODULE dh;
+    u8* fn = getenv("AFL_POST_LIBRARY");
+    u32 tlen = 6;
+
+    if (!fn) return;
+    ACTF("Loading postprocessor from '%s'...", fn);
+    dh = LoadLibraryA(fn);
+    if (!dh) FATAL("%s", dlerror());
+    post_handler = (u8* (*)(u8*,u32*))GetProcAddress(dh, "afl_postprocess");
+    if (!post_handler) FATAL("Symbol 'afl_postprocess' not found.");
+
+    /* Do a quick test. It's better to segfault now than later =) */
+    post_handler("hello", &tlen);
+    OKF("Postprocessor installed successfully.");
 }
 
 int compare_filename(const void *a, const void *b) {
@@ -1428,6 +1602,12 @@ static void read_testcases(void) {
 
     if (_access(fn, 0) || (st_size < 0))
       PFATAL("Unable to access '%s'", fn);
+
+    if (st_size == 0) {
+      ck_free(fn);
+      ck_free(dfn);
+      continue;
+    }
 
     if (st_size > MAX_FILE) 
       FATAL("Test case '%s' is too big (%s, limit is %s)", fn,
@@ -1639,7 +1819,7 @@ static void load_extras(u8* dir) {
 
   ACTF("Loading extra dictionary from '%s' (level %u)...", dir, dict_level);
 
-  if(in_dir[strlen(dir)-1] == '\\') {
+  if(dir[strlen(dir)-1] == '\\') {
     pattern = alloc_printf("%s*", dir);
   } else {
     pattern = alloc_printf("%s\\*", dir);
@@ -2022,15 +2202,53 @@ char *argv_to_cmd(char** argv) {
   return ret;
 }
 
+/*Initialazing overlapped structure and connecting*/
+static BOOL OverlappedConnectNamedPipe(HANDLE pipe_h, LPOVERLAPPED overlapped)
+{
+	ZeroMemory(overlapped, sizeof(*overlapped));
+	
+	overlapped->hEvent = CreateEvent(
+		NULL,    // default security attribute 
+		TRUE,    // manual-reset event 
+		TRUE,    // initial state = signaled 
+		NULL);   // unnamed event object 
+
+	if (overlapped->hEvent == NULL)
+	{
+		return FALSE;
+	}
+
+	if (ConnectNamedPipe(pipe_h, overlapped))
+	{
+		return FALSE;
+	}
+	switch (GetLastError())
+	{
+		// The overlapped connection in progress. 
+	case ERROR_IO_PENDING:
+		WaitForSingleObject(overlapped->hEvent, INFINITE);
+		return TRUE;
+		// Client is already connected
+	case ERROR_PIPE_CONNECTED:
+		return TRUE;
+	default:
+	{
+		return FALSE;
+	}
+	}
+}
+
 static void create_target_process(char** argv) {
-  char* dr_cmd;
-  char* pipe_name;
+  char *cmd;
+  char *pipe_name;
   char *buf;
   char *pidfile;
   FILE *fp;
   size_t pidsize;
   BOOL inherit_handles = TRUE;
 
+  HANDLE hJob = NULL;
+  JOBOBJECT_EXTENDED_LIMIT_INFORMATION job_limit;
   STARTUPINFO si;
   PROCESS_INFORMATION pi;
 
@@ -2038,7 +2256,8 @@ static void create_target_process(char** argv) {
 
   pipe_handle = CreateNamedPipe(
     pipe_name,                // pipe name
-    PIPE_ACCESS_DUPLEX,       // read/write access
+	PIPE_ACCESS_DUPLEX |     // read/write access 
+	FILE_FLAG_OVERLAPPED,    // overlapped mode 
     0,
     1,                        // max. instances
     512,                      // output buffer size
@@ -2046,22 +2265,15 @@ static void create_target_process(char** argv) {
     20000,                    // client time-out
     NULL);                    // default security attribute
 
-  if (pipe_handle == INVALID_HANDLE_VALUE)
-  {
-      FATAL("CreateNamedPipe failed, GLE=%d.\n", GetLastError());
+  if (pipe_handle == INVALID_HANDLE_VALUE) {
+    FATAL("CreateNamedPipe failed, GLE=%d.\n", GetLastError());
   }
 
   target_cmd = argv_to_cmd(argv);
 
-  pidfile = alloc_printf("childpid_%s.txt", fuzzer_id);
-  dr_cmd = alloc_printf(
-    "%s\\drrun.exe -pidfile %s -no_follow_children -c winafl.dll %s -fuzzer_id %s -- %s",
-    dynamorio_dir, pidfile, client_params, fuzzer_id, target_cmd
-  );
-
-  ZeroMemory( &si, sizeof(si) );
+  ZeroMemory(&si, sizeof(si));
   si.cb = sizeof(si);
-  ZeroMemory( &pi, sizeof(pi) );
+  ZeroMemory(&pi, sizeof(pi));
 
   if(sinkhole_stds) {
     si.hStdOutput = si.hStdError = devnul_handle;
@@ -2070,114 +2282,186 @@ static void create_target_process(char** argv) {
     inherit_handles = FALSE;
   }
 
-  if(!CreateProcess(NULL, dr_cmd, NULL, NULL, inherit_handles, /*CREATE_NO_WINDOW*/0, NULL, NULL, &si, &pi)) {
+  if(drioless) {
+    char *static_config = alloc_printf("%s:%d", fuzzer_id, fuzz_iterations_max);
+
+    if (static_config == NULL) {
+      FATAL("Cannot allocate static_config.");
+    }
+
+    SetEnvironmentVariable("AFL_STATIC_CONFIG", static_config);
+    cmd = alloc_printf("%s", target_cmd);
+    ck_free(static_config);
+  } else {
+    pidfile = alloc_printf("childpid_%s.txt", fuzzer_id);
+	if (persist_dr_cache) {
+		cmd = alloc_printf(
+			"%s\\drrun.exe -pidfile %s -no_follow_children -persist -persist_dir \"%s\\drcache\" -c winafl.dll %s -fuzzer_id %s -drpersist -- %s",
+			dynamorio_dir, pidfile, out_dir, client_params, fuzzer_id, target_cmd);
+	} else {
+		cmd = alloc_printf(
+			"%s\\drrun.exe -pidfile %s -no_follow_children -c winafl.dll %s -fuzzer_id %s -- %s",
+			dynamorio_dir, pidfile, client_params, fuzzer_id, target_cmd);
+	}
+  }
+  if(mem_limit || cpu_aff) {
+    hJob = CreateJobObject(NULL, NULL);
+    if(hJob == NULL) {
+      FATAL("CreateJobObject failed, GLE=%d.\n", GetLastError());
+    }
+
+    ZeroMemory(&job_limit, sizeof(job_limit));
+    if (mem_limit) {
+      job_limit.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_PROCESS_MEMORY;
+      job_limit.ProcessMemoryLimit = mem_limit * 1024 * 1024;
+    }
+	
+    if (cpu_aff) {
+      job_limit.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_AFFINITY;
+      job_limit.BasicLimitInformation.Affinity = (DWORD_PTR)cpu_aff;
+    }
+
+    if(!SetInformationJobObject(
+      hJob,
+      JobObjectExtendedLimitInformation,
+      &job_limit,
+      sizeof(job_limit)
+    )) {
+      FATAL("SetInformationJobObject failed, GLE=%d.\n", GetLastError());
+    }
+  }
+
+  if(!CreateProcess(NULL, cmd, NULL, NULL, inherit_handles, CREATE_SUSPENDED, NULL, NULL, &si, &pi)) {
     FATAL("CreateProcess failed, GLE=%d.\n", GetLastError());
   }
 
   child_handle = pi.hProcess;
   child_thread_handle = pi.hThread;
 
+  if(mem_limit || cpu_aff) {
+    if(!AssignProcessToJobObject(hJob, child_handle)) {
+      FATAL("AssignProcessToJobObject failed, GLE=%d.\n", GetLastError());
+    }
+  }
+
+  ResumeThread(child_thread_handle);
+
   watchdog_timeout_time = get_cur_time() + exec_tmout;
   watchdog_enabled = 1;
 
-  if(!ConnectNamedPipe(pipe_handle, NULL)) {
-    if(GetLastError() != ERROR_PIPE_CONNECTED) {
-        FATAL("ConnectNamedPipe failed, GLE=%d.\n", GetLastError());
-    }
+  if(!OverlappedConnectNamedPipe(pipe_handle, &pipe_overlapped)) {
+      FATAL("ConnectNamedPipe failed, GLE=%d.\n", GetLastError());
   }
 
   watchdog_enabled = 0;
 
-  //by the time pipe has connected the pidfile must have been created
-
-  fp = fopen(pidfile, "rb");
-  if(!fp) {
+  if(drioless == 0) {
+    //by the time pipe has connected the pidfile must have been created
+    fp = fopen(pidfile, "rb");
+    if(!fp) {
       FATAL("Error opening pidfile.txt");
+    }
+    fseek(fp,0,SEEK_END);
+    pidsize = ftell(fp);
+    fseek(fp,0,SEEK_SET);
+    buf = (char *)malloc(pidsize+1);
+    fread(buf, pidsize, 1, fp);
+    buf[pidsize] = 0;
+    fclose(fp);
+    remove(pidfile);
+    child_pid = atoi(buf);
+    free(buf);
+    ck_free(pidfile);
   }
-  fseek(fp,0,SEEK_END);
-  pidsize = ftell(fp);
-  fseek(fp,0,SEEK_SET);
-  buf = (char *)malloc(pidsize+1);
-  fread(buf, pidsize, 1, fp);
-  buf[pidsize] = 0;
-  fclose(fp);
-  remove(pidfile);
+  else {
+    child_pid = pi.dwProcessId;
+  }
 
-  child_pid = atoi(buf);
-
-  free(buf);
-  ck_free(pidfile);
   ck_free(target_cmd);
-  ck_free(dr_cmd);
+  ck_free(cmd);
   ck_free(pipe_name);
 }
 
+
 static void destroy_target_process(int wait_exit) {
-  char* kill_cmd;
-  STARTUPINFO si;
-  PROCESS_INFORMATION pi;
+	char* kill_cmd;
+	BOOL still_alive = TRUE;
+	STARTUPINFO si;
+	PROCESS_INFORMATION pi;
 
-  EnterCriticalSection(&critical_section);
+	EnterCriticalSection(&critical_section);
 
-  //nudge the child process
-  if(child_handle) {
-
-	if(WaitForSingleObject(child_handle, wait_exit ) == WAIT_TIMEOUT) {
-
-      kill_cmd = alloc_printf("%s\\drconfig.exe -nudge_pid %d 0 1", dynamorio_dir, child_pid);
-
-      ZeroMemory( &si, sizeof(si) );
-      si.cb = sizeof(si);
-      ZeroMemory( &pi, sizeof(pi) );
-
-      if(!CreateProcess(NULL, kill_cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
-        FATAL("CreateProcess failed, GLE=%d.\n", GetLastError());
-      }
-
-      CloseHandle(pi.hProcess);
-      CloseHandle(pi.hThread);
-
-      ck_free(kill_cmd);
-
-      //wait until the child process exits
-
-      if(WaitForSingleObject(child_handle, 2000) == WAIT_TIMEOUT) {
-          ZeroMemory( &si, sizeof(si) );
-          si.cb = sizeof(si);
-          ZeroMemory( &pi, sizeof(pi) );
-
-          kill_cmd = alloc_printf("taskkill /PID %d /F", child_pid);
-
-          if(!CreateProcess(NULL, kill_cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
-            FATAL("CreateProcess failed, GLE=%d.\n", GetLastError());
-          }
-
-          CloseHandle(pi.hProcess);
-          CloseHandle(pi.hThread);
-
-          ck_free(kill_cmd);
-
-		  if(WaitForSingleObject(child_handle, 20000) == WAIT_TIMEOUT) {
-			  FATAL("Cannot kill child process\n");
-		  }
-	  }
+	if (!child_handle) {
+		goto leave;
 	}
 
-    CloseHandle(child_handle);
-    CloseHandle(child_thread_handle);
+	if (WaitForSingleObject(child_handle, wait_exit) != WAIT_TIMEOUT) {
+		goto done;
+	}
 
-    child_handle = NULL;
-  }
+	// nudge the child process only if dynamorio is used
+	if (drioless) {
+		TerminateProcess(child_handle, 0);
+	}
+	else {
+		kill_cmd = alloc_printf("%s\\drconfig.exe -nudge_pid %d 0 1", dynamorio_dir, child_pid);
 
-  //close the pipe
-  if(pipe_handle) {
-    DisconnectNamedPipe(pipe_handle); 
-    CloseHandle(pipe_handle);
+		ZeroMemory(&si, sizeof(si));
+		si.cb = sizeof(si);
+		ZeroMemory(&pi, sizeof(pi));
 
-    pipe_handle = NULL;
-  }
+		if (!CreateProcess(NULL, kill_cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
+			FATAL("CreateProcess failed, GLE=%d.\n", GetLastError());
+		}
 
-  LeaveCriticalSection(&critical_section);
+		CloseHandle(pi.hProcess);
+		CloseHandle(pi.hThread);
+
+		ck_free(kill_cmd);
+	}
+
+	still_alive = WaitForSingleObject(child_handle, 2000) == WAIT_TIMEOUT;
+
+	if (still_alive) {
+		//wait until the child process exits
+		ZeroMemory(&si, sizeof(si));
+		si.cb = sizeof(si);
+		ZeroMemory(&pi, sizeof(pi));
+
+		kill_cmd = alloc_printf("taskkill /PID %d /F", child_pid);
+
+		if (!CreateProcess(NULL, kill_cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
+			FATAL("CreateProcess failed, GLE=%d.\n", GetLastError());
+		}
+
+		CloseHandle(pi.hProcess);
+		CloseHandle(pi.hThread);
+
+		ck_free(kill_cmd);
+
+		if (WaitForSingleObject(child_handle, 20000) == WAIT_TIMEOUT) {
+			FATAL("Cannot kill child process\n");
+		}
+	}
+
+done:
+	CloseHandle(child_handle);
+	CloseHandle(child_thread_handle);
+
+	child_handle = NULL;
+	child_thread_handle = NULL;
+
+leave:
+	//close the pipe
+	if (pipe_handle) {
+		DisconnectNamedPipe(pipe_handle);
+		CloseHandle(pipe_handle);
+		CloseHandle(pipe_overlapped.hEvent);
+
+		pipe_handle = NULL;
+	}
+
+	LeaveCriticalSection(&critical_section);
 }
 
 DWORD WINAPI watchdog_timer( LPVOID lpParam ) {
@@ -2191,6 +2475,37 @@ DWORD WINAPI watchdog_timer( LPVOID lpParam ) {
 	}
 }
 
+char ReadCommandFromPipe(u32 timeout)
+{
+	DWORD num_read;
+	char result = 0;
+	if (!is_child_running())
+	{
+		return 0;
+	}
+
+	if (ReadFile(pipe_handle, &result, 1, &num_read, &pipe_overlapped) || GetLastError() == ERROR_IO_PENDING)
+	{
+		//ACTF("ReadFile success or GLE IO_PENDING", result);
+		if (WaitForSingleObject(pipe_overlapped.hEvent, timeout) != WAIT_OBJECT_0) {
+			// took longer than specified timeout or other error - cancel read
+			CancelIo(pipe_handle);
+			WaitForSingleObject(pipe_overlapped.hEvent, INFINITE); //wait for cancelation to finish properly.
+			result = 0;
+		}
+	}
+	//ACTF("ReadFile GLE %d", GetLastError());
+	//ACTF("read from pipe '%c'", result);
+	return result;
+}
+
+void WriteCommandToPipe(char cmd)
+{
+	DWORD num_written;
+	//ACTF("write to pipe '%c'", cmd);
+	WriteFile(pipe_handle, &cmd, 1, &num_written, &pipe_overlapped);
+}
+
 static void setup_watchdog_timer() {
 	watchdog_enabled = 0;
 	InitializeCriticalSection(&critical_section);
@@ -2198,17 +2513,83 @@ static void setup_watchdog_timer() {
 }
 
 static int is_child_running() {
-   return (child_handle && (WaitForSingleObject(child_handle, 0 ) == WAIT_TIMEOUT));
+  int ret;
+
+  EnterCriticalSection(&critical_section);
+  ret = (child_handle && (WaitForSingleObject(child_handle, 0 ) == WAIT_TIMEOUT));
+  LeaveCriticalSection(&critical_section);
+
+  return ret;
+}
+
+//Define the function prototypes
+typedef int (APIENTRY* dll_run)(char*, long, int);
+typedef int (APIENTRY* dll_init)();
+typedef u8 (APIENTRY* dll_run_target)(char**, u32, char*, u32);
+typedef void (APIENTRY *dll_write_to_testcase)(char*, s32, const void*, u32);
+
+// custom server functions
+dll_run dll_run_ptr = NULL;
+dll_init dll_init_ptr = NULL;
+dll_run_target dll_run_target_ptr = NULL;
+dll_write_to_testcase dll_write_to_testcase_ptr = NULL;
+
+char *get_test_case(long *fsize)
+{
+  /* open generated file */
+  s32 fd = out_fd;
+  if (out_file != NULL)
+    fd = open(out_file, O_RDONLY | O_BINARY);
+
+  *fsize = lseek(fd, 0, SEEK_END);
+  lseek(fd, 0, SEEK_SET);
+
+  /* allocate buffer to read the file */
+  char *buf = malloc(*fsize);
+  ck_read(fd, buf, *fsize, "input file");
+
+  if(out_file != NULL)
+    close(fd);
+
+  return buf;
+}
+
+/* This function is used to call user-defined server routine to send data back into sample */
+static int process_test_case_into_dll(int fuzz_iterations)
+{
+  int result;
+  long fsize;
+
+  char *buf = get_test_case(&fsize);
+
+  result = dll_run_ptr(buf, fsize, fuzz_iterations); /* caller should copy the buffer */
+
+  free(buf);
+
+  if (result == 0)
+    FATAL("Unable to process test case, the user-defined DLL returned 0");
+
+  return 1;
 }
 
 /* Execute target application, monitoring for timeouts. Return status
    information. The called program will update trace_bits[]. */
 
-static u8 run_target(char** argv) {
-  //todo watchdog timer to detect hangs
+static u8 run_target(char** argv, u32 timeout) {
+	total_execs++;
 
-  char command[] = "F";
-  DWORD num_read;
+    if (dll_run_target_ptr) {
+      return dll_run_target_ptr(argv, timeout, trace_bits, MAP_SIZE);
+    }
+
+#ifdef INTELPT
+	if (use_intelpt) {
+		return run_target_pt(argv, timeout);
+	}
+#endif
+
+  //todo watchdog timer to detect hangs
+  DWORD num_read, dwThreadId;
   char result = 0;
 
   if(sinkhole_stds && devnul_handle == INVALID_HANDLE_VALUE) {
@@ -2226,44 +2607,67 @@ static u8 run_target(char** argv) {
     }
   }
 
+  if (dll_init_ptr) {
+    if (!dll_init_ptr())
+      PFATAL("User-defined custom initialization routine returned 0");
+  }
+
   if(!is_child_running()) {
     destroy_target_process(0);
-	create_target_process(argv);
-	fuzz_iterations_current = 0;
+    create_target_process(argv);
+    fuzz_iterations_current = 0;
   }
+
+  if (dll_run_ptr)
+    process_test_case_into_dll(fuzz_iterations_current);
 
   child_timed_out = 0;
   memset(trace_bits, 0, MAP_SIZE);
-
-  WriteFile( 
-    pipe_handle,        // handle to pipe 
-    command,     // buffer to write from 
-    1, // number of bytes to write 
-    &num_read,   // number of bytes written 
-    NULL);        // not overlapped I/O 
-
-
-  watchdog_timeout_time = get_cur_time() + exec_tmout;
+  MemoryBarrier();
+  if (fuzz_iterations_current == 0 && init_tmout != 0) {
+	  watchdog_timeout_time = get_cur_time() + init_tmout;
+  }
+  else {
+	  watchdog_timeout_time = get_cur_time() + timeout;
+  }
   watchdog_enabled = 1;
+  result = ReadCommandFromPipe(timeout);
+  if (result == 'K')
+  {
+	  //a workaround for first cycle in app persistent mode
+	  result = ReadCommandFromPipe(timeout);
+  }
+  if (result == 0) 
+  {
+	  //saves us from getting stuck in corner case.
+	  MemoryBarrier();
+	  watchdog_enabled = 0;
 
-  ReadFile(pipe_handle, &result, 1, &num_read, NULL);
+      destroy_target_process(0);
+      return FAULT_TMOUT;
+  }
+  if (result != 'P')
+  {
+	  FATAL("Unexpected result from pipe! expected 'P', instead received '%c'\n", result);
+  }
+  WriteCommandToPipe('F');
 
+  result = ReadCommandFromPipe(timeout); //no need to check for "error(0)" since we are exiting anyway
+  //ACTF("result: '%c'", result);
+  MemoryBarrier();
   watchdog_enabled = 0;
 
-  total_execs++;
+#ifdef _WIN64
+  classify_counts((u64*)trace_bits);
+#else
+  classify_counts((u32*)trace_bits);
+#endif /* ^_WIN64 */
+
   fuzz_iterations_current++;
 
   if(fuzz_iterations_current == fuzz_iterations_max) {
 	  destroy_target_process(2000);
   }
-
-  //printf("total_execs: %lld\n", total_execs);
-
-#ifdef __x86_64__
-  classify_counts((u64*)trace_bits);
-#else
-  classify_counts((u32*)trace_bits);
-#endif /* ^__x86_64__ */
 
   if (result == 'K') return FAULT_NONE;
 
@@ -2273,7 +2677,7 @@ static u8 run_target(char** argv) {
   }
 
   destroy_target_process(0);
-  return FAULT_HANG;
+  return FAULT_TMOUT;
 }
 
 
@@ -2282,6 +2686,11 @@ static u8 run_target(char** argv) {
    truncated. */
 
 static void write_to_testcase(void* mem, u32 len) {
+
+  if (dll_write_to_testcase_ptr) {
+      dll_write_to_testcase_ptr(out_file, out_fd, mem, len);
+      return;
+  }
 
   s32 fd = out_fd;
 
@@ -2319,39 +2728,12 @@ static void write_to_testcase(void* mem, u32 len) {
 /* The same, but with an adjustable gap. Used for trimming. */
 
 static void write_with_gap(char* mem, u32 len, u32 skip_at, u32 skip_len) {
-
-  s32 fd = out_fd;
-  u32 tail_len = len - skip_at - skip_len;
-
-  if (out_file) {
-
-    unlink(out_file); /* Ignore errors. */
-
-    fd = open(out_file, O_WRONLY | O_BINARY | O_CREAT | O_EXCL, 0600);
-
-    if (fd < 0) {
-      destroy_target_process(0);
-
-	  unlink(out_file); /* Ignore errors. */
-
-      fd = open(out_file, O_WRONLY | O_BINARY | O_CREAT | O_EXCL, 0600);
-
-      if (fd < 0) PFATAL("Unable to create '%s'", out_file);
-	}
-
-  } else lseek(fd, 0, SEEK_SET);
-
-  if (skip_at) ck_write(fd, mem, skip_at, out_file);
-
-  if (tail_len) ck_write(fd, mem + skip_at + skip_len, tail_len, out_file);
-
-  if (!out_file) {
-
-    if (_chsize(fd, len - skip_len)) PFATAL("ftruncate() failed");
-    lseek(fd, 0, SEEK_SET);
-
-  } else close(fd);
-
+  
+  char* trimmed_mem = malloc(len - skip_len);
+  memcpy(trimmed_mem, mem, skip_at); //copy start
+  memcpy(trimmed_mem + skip_at, mem + skip_at + skip_len, len - (skip_at + skip_len));
+  write_to_testcase(trimmed_mem, len - skip_len);
+  free(trimmed_mem);
 }
 
 
@@ -2364,10 +2746,15 @@ static void show_stats(void);
 static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
                          u32 handicap, u8 from_queue) {
 
-  u8  fault = 0, new_bits = 0, var_detected = 0, first_run = (q->exec_cksum == 0);
+  static u8 first_trace[MAP_SIZE];
+
+  u8  fault = 0, new_bits = 0, var_detected = 0,
+      first_run = (q->exec_cksum == 0);
+
   u64 start_us, stop_us;
 
-  s32 old_sc = stage_cur, old_sm = stage_max, old_tmout = exec_tmout;
+  s32 old_sc = stage_cur, old_sm = stage_max;
+  u32 use_tmout = exec_tmout;
   u8* old_sn = stage_name;
 
   /* Be a bit more generous about timeouts when resuming sessions, or when
@@ -2375,16 +2762,18 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
      to intermittent latency. */
 
   if (!from_queue || resuming_fuzz)
-    exec_tmout = MAX(exec_tmout + CAL_TMOUT_ADD,
-                     exec_tmout * CAL_TMOUT_PERC / 100);
+    use_tmout = MAX(exec_tmout + CAL_TMOUT_ADD,
+                    exec_tmout * CAL_TMOUT_PERC / 100);
 
   q->cal_failed++;
 
   stage_name = "calibration";
-  stage_max  = no_var_check ? CAL_CYCLES_NO_VAR : CAL_CYCLES;
+  stage_max  = CAL_CYCLES;
 
   /* Make sure the forkserver is up before we do anything, and let's not
      count its spin-up time toward binary calibration. */
+
+  if (q->exec_cksum) memcpy(first_trace, trace_bits, MAP_SIZE);
 
   start_us = get_cur_time_us();
 
@@ -2396,7 +2785,7 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
 
     write_to_testcase(use_mem, q->len);
 
-    fault = run_target(argv);
+    fault = run_target(argv, use_tmout);
 
     /* stop_soon is set by the handler for Ctrl+C. When it's pressed,
        we want to bail out quickly. */
@@ -2415,12 +2804,24 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
       u8 hnb = has_new_bits(virgin_bits);
       if (hnb > new_bits) new_bits = hnb;
 
-      if (!no_var_check && q->exec_cksum) {
+      if (q->exec_cksum) {
+
+        u32 i;
+
+        for (i = 0; i < MAP_SIZE; i++)
+          if (!var_bytes[i] && first_trace[i] != trace_bits[i]) {
+            var_bytes[i] = 1;
+            stage_max    = CAL_CYCLES_LONG;
+          }
 
         var_detected = 1;
-        stage_max    = CAL_CYCLES_LONG;
 
-      } else q->exec_cksum = cksum;
+      } else {
+
+        q->exec_cksum = cksum;
+        memcpy(first_trace, trace_bits, MAP_SIZE);
+
+      }
 
     }
 
@@ -2459,15 +2860,20 @@ abort_calibration:
 
   /* Mark variable paths. */
 
-  if (var_detected && !q->var_behavior) {
-    mark_as_variable(q);
-    queued_variable++;
+  if (var_detected) {
+
+    var_byte_count = count_bytes(var_bytes);
+
+    if (!q->var_behavior) {
+      mark_as_variable(q);
+      queued_variable++;
+    }
+
   }
 
   stage_name = old_sn;
   stage_cur  = old_sc;
   stage_max  = old_sm;
-  exec_tmout = old_tmout;
 
   if (!first_run) show_stats();
 
@@ -2540,7 +2946,7 @@ static void perform_dry_run(char** argv) {
 
         break;
 
-      case FAULT_HANG:
+      case FAULT_TMOUT:
 
         if (timeout_given) {
 
@@ -2549,7 +2955,7 @@ static void perform_dry_run(char** argv) {
              out. */
 
           if (timeout_given > 1) {
-            WARNF("Test case results in a hang (skipping)");
+            WARNF("Test case results in a timeout (skipping)");
             q->cal_failed = CAL_CHANCES;
             cal_failures++;
             break;
@@ -2563,7 +2969,7 @@ static void perform_dry_run(char** argv) {
                "    '+' at the end of the value passed to -t ('-t %u+').\n", exec_tmout,
                exec_tmout);
 
-          FATAL("Test case '%s' results in a hang", fn);
+          FATAL("Test case '%s' results in a timeout", fn);
 
         } else {
 
@@ -2575,7 +2981,7 @@ static void perform_dry_run(char** argv) {
                "    If this test case is just a fluke, the other option is to just avoid it\n"
                "    altogether, and find one that is less of a CPU hog.\n", exec_tmout);
 
-          FATAL("Test case '%s' results in a hang", fn);
+          FATAL("Test case '%s' results in a timeout", fn);
 
         }
 
@@ -2949,28 +3355,44 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
 
   switch (fault) {
 
-    case FAULT_HANG:
+    case FAULT_TMOUT:
 
-      /* Hangs are not very interesting, but we're still obliged to keep
+      /* Timeouts are not very interesting, but we're still obliged to keep
          a handful of samples. We use the presence of new bits in the
          hang-specific bitmap as a signal of uniqueness. In "dumb" mode, we
          just keep everything. */
 
-      total_hangs++;
+      total_tmouts++;
 
       if (unique_hangs >= KEEP_UNIQUE_HANG) return keeping;
 
       if (!dumb_mode) {
 
-#ifdef __x86_64__
+#ifdef _WIN64
         simplify_trace((u64*)trace_bits);
 #else
         simplify_trace((u32*)trace_bits);
-#endif /* ^__x86_64__ */
+#endif /* ^_WIN64 */
 
-        if (!has_new_bits(virgin_hang)) return keeping;
+        if (!has_new_bits(virgin_tmout)) return keeping;
 
       }
+
+      unique_tmouts++;
+
+      /* Before saving, we make sure that it's a genuine hang by re-running
+         the target with a more generous timeout (unless the default timeout
+         is already generous). */
+
+      if (exec_tmout < hang_tmout) {
+
+        u8 new_fault;
+        write_to_testcase(mem, len);
+        new_fault = run_target(argv, hang_tmout);
+
+        if (stop_soon || new_fault != FAULT_TMOUT) return keeping;
+
+       }
 
 #ifndef SIMPLE_FILES
 
@@ -2992,8 +3414,9 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
 
     case FAULT_CRASH:
 
-      /* This is handled in a manner roughly similar to hangs,
-         except for slightly different limits. */
+      /* This is handled in a manner roughly similar to timeouts,
+         except for slightly different limits and no need to re-run test
+         cases. */
 
       total_crashes++;
 
@@ -3001,11 +3424,11 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
 
       if (!dumb_mode) {
 
-#ifdef __x86_64__
+#ifdef _WIN64
         simplify_trace((u64*)trace_bits);
 #else
         simplify_trace((u32*)trace_bits);
-#endif /* ^__x86_64__ */
+#endif /* ^_WIN64 */
 
         if (!has_new_bits(virgin_crash)) return keeping;
 
@@ -3028,6 +3451,8 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
       unique_crashes++;
 
       last_crash_time = get_cur_time();
+
+      last_crash_execs = total_execs;
 
       break;
 
@@ -3125,9 +3550,9 @@ static void find_timeout(void) {
 
 /* Update stats file for unattended monitoring. */
 
-static void write_stats_file(double bitmap_cvg, double eps) {
+static void write_stats_file(double bitmap_cvg, double stability, double eps) {
 
-  static double last_bcvg, last_eps;
+  static double last_bcvg, last_stab, last_eps;
 
   u8* fn = alloc_printf("%s\\fuzzer_stats", out_dir);
   s32 fd;
@@ -3146,46 +3571,51 @@ static void write_stats_file(double bitmap_cvg, double eps) {
   /* Keep last values in case we're called from another context
      where exec/sec stats and such are not readily available. */
 
-  if (!bitmap_cvg && !eps) {
+  if (!bitmap_cvg && !stability && !eps) {
     bitmap_cvg = last_bcvg;
+    stability  = last_stab;
     eps        = last_eps;
   } else {
     last_bcvg = bitmap_cvg;
+    last_stab = stability;
     last_eps  = eps;
   }
 
-  fprintf(f, "start_time     : %llu\n"
-             "last_update    : %llu\n"
-             "fuzzer_pid     : %u\n"
-             "cycles_done    : %llu\n"
-             "execs_done     : %llu\n"
-             "execs_per_sec  : %0.02f\n"
-             "paths_total    : %u\n"
-             "paths_favored  : %u\n"
-             "paths_found    : %u\n"
-             "paths_imported : %u\n"
-             "max_depth      : %u\n"
-             "cur_path       : %u\n"
-             "pending_favs   : %u\n"
-             "pending_total  : %u\n"
-             "variable_paths : %u\n"
-             "bitmap_cvg     : %0.02f%%\n"
-             "unique_crashes : %llu\n"
-             "unique_hangs   : %llu\n"
-             "last_path      : %llu\n"
-             "last_crash     : %llu\n"
-             "last_hang      : %llu\n"
-             "exec_timeout   : %u\n"
-             "afl_banner     : %s\n"
-             "afl_version    : 1.96b\n"
-             "command_line   : %s\n",
-             start_time / 1000, get_cur_time() / 1000, 0,
+  fprintf(f, "start_time        : %llu\n"
+             "last_update       : %llu\n"
+             "fuzzer_pid        : %u\n"
+             "cycles_done       : %llu\n"
+             "execs_done        : %llu\n"
+             "execs_per_sec     : %0.02f\n"
+             "paths_total       : %u\n"
+             "paths_favored     : %u\n"
+             "paths_found       : %u\n"
+             "paths_imported    : %u\n"
+             "max_depth         : %u\n"
+             "cur_path          : %u\n"
+             "pending_favs      : %u\n"
+             "pending_total     : %u\n"
+             "variable_paths    : %u\n"
+             "stability         : %0.02f%%\n"
+             "bitmap_cvg        : %0.02f%%\n"
+             "unique_crashes    : %llu\n"
+             "unique_hangs      : %llu\n"
+             "last_path         : %llu\n"
+             "last_crash        : %llu\n"
+             "last_hang         : %llu\n"
+             "execs_since_crash : %llu\n"
+             "exec_timeout      : %u\n"
+             "afl_banner        : %s\n"
+             "afl_version       : " VERSION "\n"
+             "command_line      : %s\n",
+             start_time / 1000, get_cur_time() / 1000, GetCurrentProcessId(),
              queue_cycle ? (queue_cycle - 1) : 0, total_execs, eps,
              queued_paths, queued_favored, queued_discovered, queued_imported,
              max_depth, current_entry, pending_favored, pending_not_fuzzed,
-             queued_variable, bitmap_cvg, unique_crashes, unique_hangs,
-             last_path_time / 1000, last_crash_time / 1000,
-             last_hang_time / 1000, exec_tmout, use_banner, orig_cmdline);
+             queued_variable, stability, bitmap_cvg, unique_crashes,
+             unique_hangs, last_path_time / 1000, last_crash_time / 1000,
+             last_hang_time / 1000, total_execs - last_crash_execs,
+             exec_tmout, use_banner, orig_cmdline);
              /* ignore errors */
 
   fclose(f);
@@ -3271,6 +3701,41 @@ static u8 delete_files(u8* path, u8* prefix) {
   ck_free(pattern);
 
   return !!_rmdir(path);
+
+}
+
+
+static u8 delete_subdirectories(u8* path) {
+	char *pattern;
+	WIN32_FIND_DATA fd;
+	HANDLE h;
+
+	if (_access(path, 0)) return 0;
+
+	pattern = alloc_printf("%s\\*", path);
+
+	h = FindFirstFile(pattern, &fd);
+	if (h == INVALID_HANDLE_VALUE) {
+		ck_free(pattern);
+		return !!_rmdir(path);
+	}
+
+	do {
+		if (fd.cFileName[0] != '.') {
+
+			u8* fname = alloc_printf("%s\\%s", path, fd.cFileName);
+			if (delete_files(fname, NULL)) PFATAL("Unable to delete '%s'", fname);
+			ck_free(fname);
+
+		}
+
+	} while (FindNextFile(h, &fd));
+
+	FindClose(h);
+
+	ck_free(pattern);
+
+	return !!_rmdir(path);
 
 }
 
@@ -3571,6 +4036,14 @@ static void maybe_delete_out_dir(void) {
   if (unlink(fn) && errno != ENOENT) goto dir_cleanup_failed;
   ck_free(fn);
 
+  fn = alloc_printf("%s\\drcache", out_dir);
+  if(delete_subdirectories(fn)) goto dir_cleanup_failed;
+  ck_free(fn);
+
+  fn = alloc_printf("%s\\ptmodules", out_dir);
+  if (delete_files(fn, NULL)) goto dir_cleanup_failed;
+  ck_free(fn);
+
   OKF("Output dir cleanup successful.");
 
   /* Wow... is that all? If yes, celebrate! */
@@ -3603,7 +4076,7 @@ static void show_stats(void) {
 
   static u64 last_stats_ms, last_plot_ms, last_ms, last_execs;
   static double avg_exec;
-  double t_byte_ratio;
+  double t_byte_ratio, stab_ratio;
 
   u64 cur_ms;
   u32 t_bytes, t_bits;
@@ -3656,12 +4129,17 @@ static void show_stats(void) {
   t_bytes = count_non_255_bytes(virgin_bits);
   t_byte_ratio = ((double)t_bytes * 100) / MAP_SIZE;
 
+  if (t_bytes)
+    stab_ratio = 100 - ((double)var_byte_count) * 100 / t_bytes;
+  else
+    stab_ratio = 100;
+
   /* Roughly every minute, update fuzzer stats and save auto tokens. */
 
   if (cur_ms - last_stats_ms > STATS_UPDATE_SEC * 1000) {
 
     last_stats_ms = cur_ms;
-    write_stats_file(t_byte_ratio, avg_exec);
+    write_stats_file(t_byte_ratio, stab_ratio, avg_exec);
     save_auto();
     write_bitmap();
 
@@ -3678,7 +4156,7 @@ static void show_stats(void) {
 
   /* Honor AFL_EXIT_WHEN_DONE. */
 
-  if (!dumb_mode && cycles_wo_finds > 20 && !pending_not_fuzzed &&
+  if (!dumb_mode && cycles_wo_finds > 50 && !pending_not_fuzzed &&
       getenv("AFL_EXIT_WHEN_DONE")) stop_soon = 2;
 
   /* If we're not on TTY, bail out. */
@@ -3705,7 +4183,7 @@ static void show_stats(void) {
   if (term_too_small) {
 
     SAYF(cBRI "Your terminal is too small to display the UI.\n"
-         "Please resize terminal window to at least 80x25.\n" cNOR);
+         "Please resize terminal window to at least 80x25.\n" cRST);
 
     return;
 
@@ -3742,25 +4220,27 @@ static void show_stats(void) {
 
   if (dumb_mode) {
 
-    strcpy(tmp, cNOR);
+    strcpy(tmp, cRST);
 
   } else {
+    u64 min_wo_finds = (cur_ms - last_path_time) / 1000 / 60;
 
     /* First queue cycle: don't stop now! */
-    if (queue_cycle == 1) strcpy(tmp, cMGN); else
+    if (queue_cycle == 1 || min_wo_finds < 15) strcpy(tmp, cMGN); else
 
     /* Subsequent cycles, but we're still making finds. */
-    if (cycles_wo_finds < 3) strcpy(tmp, cYEL); else
+    if (cycles_wo_finds < 25 || min_wo_finds < 30) strcpy(tmp, cYEL); else
 
     /* No finds for a long time and no test cases to try. */
-    if (cycles_wo_finds > 20 && !pending_not_fuzzed) strcpy(tmp, cLGN);
+    if (cycles_wo_finds > 100 && !pending_not_fuzzed && min_wo_finds > 120)
+      strcpy(tmp, cLGN);
 
     /* Default: cautiously OK to stop? */
     else strcpy(tmp, cLBL);
 
   }
 
-  SAYF(bV bSTOP "        run time : " cNOR "%-34s " bSTG bV bSTOP
+  SAYF(bV bSTOP "        run time : " cRST "%-34s " bSTG bV bSTOP
        "  cycles done : %s%-4s  " bSTG bV "\n",
        DTD(cur_ms, start_time), tmp, DI(queue_cycle - 1));
 
@@ -3770,24 +4250,24 @@ static void show_stats(void) {
   if (!dumb_mode && (last_path_time || resuming_fuzz || queue_cycle == 1 ||
       in_bitmap || crash_mode)) {
 
-    SAYF(bV bSTOP "   last new path : " cNOR "%-34s ",
+    SAYF(bV bSTOP "   last new path : " cRST "%-34s ",
          DTD(cur_ms, last_path_time));
 
   } else {
 
     if (dumb_mode)
 
-      SAYF(bV bSTOP "   last new path : " cPIN "n/a" cNOR 
+      SAYF(bV bSTOP "   last new path : " cPIN "n/a" cRST 
            " (non-instrumented mode)        ");
 
      else
 
-      SAYF(bV bSTOP "   last new path : " cNOR "none yet " cLRD
+      SAYF(bV bSTOP "   last new path : " cRST "none yet " cLRD
            "(odd, check syntax!)      ");
 
   }
 
-  SAYF(bSTG bV bSTOP "  total paths : " cNOR "%-4s  " bSTG bV "\n",
+  SAYF(bSTG bV bSTOP "  total paths : " cRST "%-4s  " bSTG bV "\n",
        DI(queued_paths));
 
   /* Highlight crashes in red if found, denote going over the KEEP_UNIQUE_CRASH
@@ -3796,16 +4276,16 @@ static void show_stats(void) {
   sprintf(tmp, "%s%s", DI(unique_crashes),
           (unique_crashes >= KEEP_UNIQUE_CRASH) ? "+" : "");
 
-  SAYF(bV bSTOP " last uniq crash : " cNOR "%-34s " bSTG bV bSTOP
+  SAYF(bV bSTOP " last uniq crash : " cRST "%-34s " bSTG bV bSTOP
        " uniq crashes : %s%-5s " bSTG bV "\n",
-       DTD(cur_ms, last_crash_time), unique_crashes ? cLRD : cNOR,
+       DTD(cur_ms, last_crash_time), unique_crashes ? cLRD : cRST,
        tmp);
 
   sprintf(tmp, "%s%s", DI(unique_hangs),
          (unique_hangs >= KEEP_UNIQUE_HANG) ? "+" : "");
 
-  SAYF(bV bSTOP "  last uniq hang : " cNOR "%-34s " bSTG bV bSTOP 
-       "   uniq hangs : " cNOR "%-5s " bSTG bV "\n",
+  SAYF(bV bSTOP "  last uniq hang : " cRST "%-34s " bSTG bV bSTOP 
+       "   uniq hangs : " cRST "%-5s " bSTG bV "\n",
        DTD(cur_ms, last_hang_time), tmp);
 
   SAYF(bVR bH bSTOP cCYA " cycle progress " bSTG bH20 bHB bH bSTOP cCYA
@@ -3819,23 +4299,24 @@ static void show_stats(void) {
           queue_cur->favored ? "" : "*",
           ((double)current_entry * 100) / queued_paths);
 
-  SAYF(bV bSTOP "  now processing : " cNOR "%-17s " bSTG bV bSTOP, tmp);
+  SAYF(bV bSTOP "  now processing : " cRST "%-17s " bSTG bV bSTOP, tmp);
 
 
-  sprintf(tmp, "%s (%0.02f%%)", DI(t_bytes), t_byte_ratio);
+  sprintf(tmp, "%0.02f%% / %0.02f%%", ((double)queue_cur->bitmap_size) *
+          100 / MAP_SIZE, t_byte_ratio);
 
   SAYF("    map density : %s%-20s " bSTG bV "\n", t_byte_ratio > 70 ? cLRD : 
-       ((t_bytes < 200 && !dumb_mode) ? cPIN : cNOR), tmp);
+       ((t_bytes < 200 && !dumb_mode) ? cPIN : cRST), tmp);
 
   sprintf(tmp, "%s (%0.02f%%)", DI(cur_skipped_paths),
           ((double)cur_skipped_paths * 100) / queued_paths);
 
-  SAYF(bV bSTOP " paths timed out : " cNOR "%-17s " bSTG bV, tmp);
+  SAYF(bV bSTOP " paths timed out : " cRST "%-17s " bSTG bV, tmp);
 
   sprintf(tmp, "%0.02f bits/tuple",
           t_bytes ? (((double)t_bits) / t_bytes) : 0);
 
-  SAYF(bSTOP " count coverage : " cNOR "%-20s " bSTG bV "\n", tmp);
+  SAYF(bSTOP " count coverage : " cRST "%-20s " bSTG bV "\n", tmp);
 
   SAYF(bVR bH bSTOP cCYA " stage progress " bSTG bH20 bX bSTOP cCYA
        " findings in depth " bSTG bH20 bVL "\n");
@@ -3845,8 +4326,8 @@ static void show_stats(void) {
 
   /* Yeah... it's still going on... halp? */
 
-  SAYF(bV bSTOP "  now trying : " cNOR "%-21s " bSTG bV bSTOP 
-       " favored paths : " cNOR "%-21s " bSTG bV "\n", stage_name, tmp);
+  SAYF(bV bSTOP "  now trying : " cRST "%-21s " bSTG bV bSTOP 
+       " favored paths : " cRST "%-21s " bSTG bV "\n", stage_name, tmp);
 
   if (!stage_max) {
 
@@ -3859,27 +4340,27 @@ static void show_stats(void) {
 
   }
 
-  SAYF(bV bSTOP " stage execs : " cNOR "%-21s " bSTG bV bSTOP, tmp);
+  SAYF(bV bSTOP " stage execs : " cRST "%-21s " bSTG bV bSTOP, tmp);
 
   sprintf(tmp, "%s (%0.02f%%)", DI(queued_with_cov),
           ((double)queued_with_cov) * 100 / queued_paths);
 
-  SAYF("  new edges on : " cNOR "%-21s " bSTG bV "\n", tmp);
+  SAYF("  new edges on : " cRST "%-21s " bSTG bV "\n", tmp);
 
   sprintf(tmp, "%s (%s%s unique)", DI(total_crashes), DI(unique_crashes),
           (unique_crashes >= KEEP_UNIQUE_CRASH) ? "+" : "");
 
   if (crash_mode) {
 
-    SAYF(bV bSTOP " total execs : " cNOR "%-21s " bSTG bV bSTOP
+    SAYF(bV bSTOP " total execs : " cRST "%-21s " bSTG bV bSTOP
          "   new crashes : %s%-21s " bSTG bV "\n", DI(total_execs),
-         unique_crashes ? cLRD : cNOR, tmp);
+         unique_crashes ? cLRD : cRST, tmp);
 
   } else {
 
-    SAYF(bV bSTOP " total execs : " cNOR "%-21s " bSTG bV bSTOP
+    SAYF(bV bSTOP " total execs : " cRST "%-21s " bSTG bV bSTOP
          " total crashes : %s%-21s " bSTG bV "\n", DI(total_execs),
-         unique_crashes ? cLRD : cNOR, tmp);
+         unique_crashes ? cLRD : cRST, tmp);
 
   }
 
@@ -3895,14 +4376,14 @@ static void show_stats(void) {
   } else {
 
     sprintf(tmp, "%s/sec", DF(avg_exec));
-    SAYF(bV bSTOP "  exec speed : " cNOR "%-21s ", tmp);
+    SAYF(bV bSTOP "  exec speed : " cRST "%-21s ", tmp);
 
   }
 
-  sprintf(tmp, "%s (%s%s unique)", DI(total_hangs), DI(unique_hangs),
+  sprintf(tmp, "%s (%s%s unique)", DI(total_tmouts), DI(unique_tmouts),
           (unique_hangs >= KEEP_UNIQUE_HANG) ? "+" : "");
 
-  SAYF (bSTG bV bSTOP "   total hangs : " cNOR "%-21s " bSTG bV "\n", tmp);
+  SAYF (bSTG bV bSTOP "  total tmouts : " cRST "%-21s " bSTG bV "\n", tmp);
 
   /* Aaaalmost there... hold on! */
 
@@ -3922,8 +4403,8 @@ static void show_stats(void) {
 
   }
 
-  SAYF(bV bSTOP "   bit flips : " cNOR "%-37s " bSTG bV bSTOP "    levels : "
-       cNOR "%-9s " bSTG bV "\n", tmp, DI(max_depth));
+  SAYF(bV bSTOP "   bit flips : " cRST "%-37s " bSTG bV bSTOP "    levels : "
+       cRST "%-9s " bSTG bV "\n", tmp, DI(max_depth));
 
   if (!skip_deterministic)
     sprintf(tmp, "%s/%s, %s/%s, %s/%s",
@@ -3931,8 +4412,8 @@ static void show_stats(void) {
             DI(stage_finds[STAGE_FLIP16]), DI(stage_cycles[STAGE_FLIP16]),
             DI(stage_finds[STAGE_FLIP32]), DI(stage_cycles[STAGE_FLIP32]));
 
-  SAYF(bV bSTOP "  byte flips : " cNOR "%-37s " bSTG bV bSTOP "   pending : "
-       cNOR "%-9s " bSTG bV "\n", tmp, DI(pending_not_fuzzed));
+  SAYF(bV bSTOP "  byte flips : " cRST "%-37s " bSTG bV bSTOP "   pending : "
+       cRST "%-9s " bSTG bV "\n", tmp, DI(pending_not_fuzzed));
 
   if (!skip_deterministic)
     sprintf(tmp, "%s/%s, %s/%s, %s/%s",
@@ -3940,8 +4421,8 @@ static void show_stats(void) {
             DI(stage_finds[STAGE_ARITH16]), DI(stage_cycles[STAGE_ARITH16]),
             DI(stage_finds[STAGE_ARITH32]), DI(stage_cycles[STAGE_ARITH32]));
 
-  SAYF(bV bSTOP " arithmetics : " cNOR "%-37s " bSTG bV bSTOP "  pend fav : "
-       cNOR "%-9s " bSTG bV "\n", tmp, DI(pending_favored));
+  SAYF(bV bSTOP " arithmetics : " cRST "%-37s " bSTG bV bSTOP "  pend fav : "
+       cRST "%-9s " bSTG bV "\n", tmp, DI(pending_favored));
 
   if (!skip_deterministic)
     sprintf(tmp, "%s/%s, %s/%s, %s/%s",
@@ -3949,8 +4430,8 @@ static void show_stats(void) {
             DI(stage_finds[STAGE_INTEREST16]), DI(stage_cycles[STAGE_INTEREST16]),
             DI(stage_finds[STAGE_INTEREST32]), DI(stage_cycles[STAGE_INTEREST32]));
 
-  SAYF(bV bSTOP "  known ints : " cNOR "%-37s " bSTG bV bSTOP " own finds : "
-       cNOR "%-9s " bSTG bV "\n", tmp, DI(queued_discovered));
+  SAYF(bV bSTOP "  known ints : " cRST "%-37s " bSTG bV bSTOP " own finds : "
+       cRST "%-9s " bSTG bV "\n", tmp, DI(queued_discovered));
 
   if (!skip_deterministic)
     sprintf(tmp, "%s/%s, %s/%s, %s/%s",
@@ -3958,17 +4439,22 @@ static void show_stats(void) {
             DI(stage_finds[STAGE_EXTRAS_UI]), DI(stage_cycles[STAGE_EXTRAS_UI]),
             DI(stage_finds[STAGE_EXTRAS_AO]), DI(stage_cycles[STAGE_EXTRAS_AO]));
 
-  SAYF(bV bSTOP "  dictionary : " cNOR "%-37s " bSTG bV bSTOP
-       "  imported : " cNOR "%-9s " bSTG bV "\n", tmp,
+  SAYF(bV bSTOP "  dictionary : " cRST "%-37s " bSTG bV bSTOP
+       "  imported : " cRST "%-9s " bSTG bV "\n", tmp,
        sync_id ? DI(queued_imported) : (u8*)"n/a");
 
   sprintf(tmp, "%s/%s, %s/%s",
           DI(stage_finds[STAGE_HAVOC]), DI(stage_cycles[STAGE_HAVOC]),
           DI(stage_finds[STAGE_SPLICE]), DI(stage_cycles[STAGE_SPLICE]));
 
-  SAYF(bV bSTOP "       havoc : " cNOR "%-37s " bSTG bV bSTOP 
-       "  variable : %s%-9s " bSTG bV "\n", tmp, queued_variable ? cLRD : cNOR,
-      no_var_check ? (u8*)"n/a" : DI(queued_variable));
+  SAYF(bV bSTOP "       havoc : " cRST "%-37s " bSTG bV bSTOP, tmp);
+
+  if (t_bytes) sprintf(tmp, "%0.02f%%", stab_ratio);
+    else strcpy(tmp, "n/a");
+
+  SAYF(" stability : %s%-9s " bSTG bV "\n", (stab_ratio < 85 && var_byte_count > 40)
+       ? cLRD : ((queued_variable && (!persistent_mode || var_byte_count > 20))
+       ? cMGN : cRST), tmp);
 
   if (!bytes_trim_out) {
 
@@ -4001,7 +4487,7 @@ static void show_stats(void) {
 
   }
 
-  SAYF(bV bSTOP "        trim : " cNOR "%-37s " bSTG bVR bH20 bH2 bH bRB "\n"
+  SAYF(bV bSTOP "        trim : " cRST "%-37s " bSTG bVR bH20 bH2 bH bRB "\n"
        bLB bH30 bH20 bH2 bH bRB bSTOP cRST RESET_G1, tmp);
 
   /* Provide some CPU utilization stats. */
@@ -4094,9 +4580,9 @@ static void show_init_stats(void) {
 
   OKF("Here are some useful stats:\n\n"
 
-      cGRA "    Test case count : " cNOR "%u favored, %u variable, %u total\n"
-      cGRA "       Bitmap range : " cNOR "%u to %u bits (average: %0.02f bits)\n"
-      cGRA "        Exec timing : " cNOR "%s to %s us (average: %s us)\n",
+      cGRA "    Test case count : " cRST "%u favored, %u variable, %u total\n"
+      cGRA "       Bitmap range : " cRST "%u to %u bits (average: %0.02f bits)\n"
+      cGRA "        Exec timing : " cRST "%s to %s us (average: %s us)\n",
       queued_favored, queued_variable, queued_paths, min_bits, max_bits, 
       ((double)total_bitmap_size) / (total_bitmap_entries ? total_bitmap_entries : 1),
       DI(min_us), DI(max_us), DI(avg_us));
@@ -4129,6 +4615,12 @@ static void show_init_stats(void) {
     ACTF("Applying timeout settings from resumed session (%u ms).", exec_tmout);
 
   }
+
+  /* In dumb mode, re-running every timing out test case with a generous time
+     limit is very expensive, so let's select a more conservative default. */
+
+  if (dumb_mode && !getenv("AFL_HANG_TMOUT"))
+    hang_tmout = MIN(EXEC_TIMEOUT, exec_tmout * 2 + 100);
 
   OKF("All set and ready to roll!");
 
@@ -4194,7 +4686,7 @@ static u8 trim_case(char** argv, struct queue_entry* q, u8* in_buf) {
 
       write_with_gap(in_buf, q->len, remove_pos, trim_avail);
 
-      fault = run_target(argv);
+      fault = run_target(argv, exec_tmout);
       trim_execs++;
 
       if (stop_soon || fault == FAULT_ERROR) goto abort_trimming;
@@ -4289,18 +4781,18 @@ static u8 common_fuzz_stuff(char** argv, u8* out_buf, u32 len) {
 
   write_to_testcase(out_buf, len);
 
-  fault = run_target(argv);
+  fault = run_target(argv, exec_tmout);
 
   if (stop_soon) return 1;
 
-  if (fault == FAULT_HANG) {
+  if (fault == FAULT_TMOUT) {
 
-    if (subseq_hangs++ > HANG_LIMIT) {
+    if (subseq_tmouts++ > TMOUT_LIMIT) {
       cur_skipped_paths++;
       return 1;
     }
 
-  } else subseq_hangs = 0;
+  } else subseq_tmouts = 0;
 
   /* Users can hit us with SIGUSR1 to request the current input
      to be abandoned. */
@@ -4345,9 +4837,19 @@ static u32 choose_block_len(u32 limit) {
              max_value = HAVOC_BLK_MEDIUM;
              break;
 
-    default: min_value = HAVOC_BLK_MEDIUM;
-             max_value = HAVOC_BLK_LARGE;
+    default:
 
+             if (UR(10)) {
+
+               min_value = HAVOC_BLK_MEDIUM;
+               max_value = HAVOC_BLK_LARGE;
+
+             } else {
+
+               min_value = HAVOC_BLK_LARGE;
+               max_value = HAVOC_BLK_XL;
+
+             }
 
   }
 
@@ -4412,9 +4914,9 @@ static u32 calculate_score(struct queue_entry* q) {
 
   if(q->depth >= 4) {
 	  if(q->depth < 8) perf_score *= 2;
-	  else if(q->depth < 14) perf_score *= 4;
-	  else if(q->depth < 26) perf_score *= 6;
-	  else perf_score *= 8;
+	  else if(q->depth < 14) perf_score *= 3;
+	  else if(q->depth < 26) perf_score *= 4;
+	  else perf_score *= 5;
   }
 
   /* Make sure that we don't go over limit. */
@@ -4623,7 +5125,7 @@ static u8 fuzz_one(char** argv) {
   u64 havoc_queued,  orig_hit_cnt, new_hit_cnt;
   u32 splice_cycle = 0, perf_score = 100, orig_perf, prev_cksum, eff_cnt = 1;
 
-  u8  ret_val = 1;
+  u8  ret_val = 1, doing_det = 0;
 
   u8  a_collect[MAX_AUTO_EXTRA];
   u32 a_len = 0;
@@ -4677,7 +5179,7 @@ static u8 fuzz_one(char** argv) {
 
   len = queue_cur->len;
 
-  orig_in = in_buf = (u8 *)malloc(len);
+  orig_in = in_buf = (u8 *)ck_alloc_nozero(len);
   _read(fd, in_buf, len);
 
   close(fd);
@@ -4688,7 +5190,7 @@ static u8 fuzz_one(char** argv) {
 
   out_buf = ck_alloc_nozero(len);
 
-  subseq_hangs = 0;
+  subseq_tmouts = 0;
 
   cur_depth = queue_cur->depth;
 
@@ -4698,7 +5200,7 @@ static u8 fuzz_one(char** argv) {
 
   if (queue_cur->cal_failed) {
 
-    u8 res = FAULT_HANG;
+    u8 res = FAULT_TMOUT;
 
     if (queue_cur->cal_failed < CAL_CHANCES) {
 
@@ -4754,6 +5256,14 @@ static u8 fuzz_one(char** argv) {
 
   if (skip_deterministic || queue_cur->was_fuzzed || queue_cur->passed_det)
     goto havoc_stage;
+
+  /* Skip deterministic fuzzing if exec path checksum puts this out of scope
+     for this master instance. */
+
+  if (master_max && (queue_cur->exec_cksum % master_max) != master_id - 1)
+    goto havoc_stage;
+
+  doing_det = 1;
 
   /*********************************************
    * SIMPLE BITFLIP (+dictionary construction) *
@@ -4861,8 +5371,6 @@ static u8 fuzz_one(char** argv) {
   stage_finds[STAGE_FLIP1]  += new_hit_cnt - orig_hit_cnt;
   stage_cycles[STAGE_FLIP1] += stage_max;
 
-  if (queue_cur->passed_det) goto havoc_stage;
-
   /* Two walking bits. */
 
   stage_name  = "bitflip 2\\1";
@@ -4924,7 +5432,7 @@ static u8 fuzz_one(char** argv) {
   /* Effector map setup. These macros calculate:
 
      EFF_APOS      - position of a particular file offset in the map.
-     EFF_ALEN      - length of an map with a particular number of bytes.
+     EFF_ALEN      - length of a map with a particular number of bytes.
      EFF_SPAN_ALEN - map span for a sequence of bytes.
 
    */
@@ -5087,6 +5595,8 @@ static u8 fuzz_one(char** argv) {
   stage_cycles[STAGE_FLIP32] += stage_max;
 
 skip_bitflip:
+
+  if (no_arith) goto skip_arith;
 
   /**********************
    * ARITHMETIC INC/DEC *
@@ -5401,7 +5911,7 @@ skip_arith:
 
   /* Setting 16-bit integers, both endians. */
 
-  if (len < 2) goto skip_interest;
+  if (no_arith || len < 2) goto skip_interest;
 
   stage_name  = "interest 16\\8";
   stage_short = "int16";
@@ -5613,11 +6123,16 @@ skip_interest:
 
   ex_tmp = ck_alloc(len + MAX_DICT_FILE);
 
-  for (i = 0; i < len; i++) {
+  for (i = 0; i <= len; i++) {
 
     stage_cur_byte = i;
 
     for (j = 0; j < extras_cnt; j++) {
+
+      if (len + extras[j].len > MAX_FILE) {
+        stage_max--;
+        continue;
+      }
 
       /* Insert token */
       memcpy(ex_tmp + i, extras[j].data, extras[j].len);
@@ -5720,8 +6235,8 @@ havoc_stage:
 
     stage_name  = "havoc";
     stage_short = "havoc";
-    stage_max   = HAVOC_CYCLES * perf_score / havoc_div / 100;
-
+    stage_max = (doing_det ? HAVOC_CYCLES_INIT : HAVOC_CYCLES) *
+                 perf_score / havoc_div / 100;
   } else {
 
     static u8 tmp[32];
@@ -5959,16 +6474,26 @@ havoc_stage:
 
         case 13:
 
-          if (temp_len + HAVOC_BLK_LARGE < MAX_FILE) {
+          if (temp_len + HAVOC_BLK_XL < MAX_FILE) {
 
             /* Clone bytes (75%) or insert a block of constant bytes (25%). */
 
+            u8  actually_clone = UR(4);
             u32 clone_from, clone_to, clone_len;
             u8* new_buf;
 
-            clone_len  = choose_block_len(temp_len);
+            if (actually_clone) {
 
-            clone_from = UR(temp_len - clone_len + 1);
+              clone_len  = choose_block_len(temp_len);
+              clone_from = UR(temp_len - clone_len + 1);
+
+            } else {
+
+              clone_len = choose_block_len(HAVOC_BLK_XL);
+              clone_from = 0;
+
+            }
+
             clone_to   = UR(temp_len);
 
             new_buf = ck_alloc_nozero(temp_len + clone_len);
@@ -5979,10 +6504,11 @@ havoc_stage:
 
             /* Inserted part */
 
-            if (UR(4))
+            if (actually_clone)
               memcpy(new_buf + clone_to, out_buf + clone_from, clone_len);
             else
-              memset(new_buf + clone_to, UR(256), clone_len);
+              memset(new_buf + clone_to,
+                     UR(2) ? UR(256) : out_buf[UR(temp_len)], clone_len);
 
             /* Tail */
             memcpy(new_buf + clone_to + clone_len, out_buf + clone_to,
@@ -6015,16 +6541,17 @@ havoc_stage:
               if (copy_from != copy_to)
                 memmove(out_buf + copy_to, out_buf + copy_from, copy_len);
 
-            } else memset(out_buf + copy_to, UR(256), copy_len);
+            } else memset(out_buf + copy_to,
+                          UR(2) ? UR(256) : out_buf[UR(temp_len)], copy_len);
 
             break;
 
           }
 
-        /* Values 16 and 17 can be selected only if there are any extras
+        /* Values 15 and 16 can be selected only if there are any extras
            present in the dictionaries. */
 
-        case 16: {
+        case 15: {
 
             /* Overwrite bytes with an extra. */
 
@@ -6061,9 +6588,9 @@ havoc_stage:
 
           }
 
-        case 17: {
+        case 16: {
 
-            u32 use_extra, extra_len, insert_at = UR(temp_len);
+            u32 use_extra, extra_len, insert_at = UR(temp_len + 1);
             u8* new_buf;
 
             /* Insert an extra. Do the same dice-rolling stuff as for the
@@ -6261,6 +6788,7 @@ abandon_entry:
   }
 
   if (in_buf != orig_in) ck_free(in_buf);
+  ck_free(orig_in);
   ck_free(out_buf);
   ck_free(eff_map);
 
@@ -6284,7 +6812,7 @@ static void sync_fuzzers(char** argv) {
   find_pattern = alloc_printf("%s\\*", sync_dir);
   h = FindFirstFile(find_pattern, &sd);
   if(h == INVALID_HANDLE_VALUE) {
-	  PFATAL("Unable to open '%s'", sync_dir);
+    PFATAL("Unable to open '%s'", sync_dir);
   }
 
   stage_max = stage_cur = 0;
@@ -6314,6 +6842,7 @@ static void sync_fuzzers(char** argv) {
 
 	h2 = FindFirstFile(qd_path_pattern, &qd);
 	if(h2 == INVALID_HANDLE_VALUE) {
+      ck_free(qd_path_pattern);
       ck_free(qd_path);
       continue;
 	}
@@ -6347,7 +6876,7 @@ static void sync_fuzzers(char** argv) {
       s32 fd;
       struct stat st;
 
-	  if (qd.cFileName[0] == '.' ||
+      if (qd.cFileName[0] == '.' ||
 		  sscanf(qd.cFileName, CASE_PREFIX "%06u", &syncing_case) != 1 || 
           syncing_case < min_accept) continue;
 
@@ -6356,11 +6885,17 @@ static void sync_fuzzers(char** argv) {
       if (syncing_case >= next_min_accept)
         next_min_accept = syncing_case + 1;
 
-	  path = alloc_printf("%s\\%s", qd_path, qd.cFileName);
+      path = alloc_printf("%s\\%s", qd_path, qd.cFileName);
 
       fd = open(path, O_RDONLY | O_BINARY);
-      if (fd < 0) PFATAL("Unable to open '%s'", path);
 
+      /* Allow this to fail in case the other fuzzer is resuming or so... */
+
+      if (fd < 0) {
+         ck_free(path);
+         continue;
+      }
+ 
       if (fstat(fd, &st)) PFATAL("fstat() failed");
 
       /* Ignore zero-sized or oversized files. */
@@ -6369,18 +6904,18 @@ static void sync_fuzzers(char** argv) {
 
         u8  fault;
         u8* mem = malloc(st.st_size);
-		read(fd, mem, st.st_size);
+        read(fd, mem, st.st_size);
 			
         /* See what happens. We rely on save_if_interesting() to catch major
            errors and save the test case. */
 
         write_to_testcase(mem, st.st_size);
 
-        fault = run_target(argv);
+        fault = run_target(argv, exec_tmout);
 
         if (stop_soon) return;
 
-		syncing_party = sd.cFileName;
+        syncing_party = sd.cFileName;
         queued_imported += save_if_interesting(argv, mem, st.st_size, fault);
         syncing_party = 0;
 
@@ -6388,7 +6923,7 @@ static void sync_fuzzers(char** argv) {
 
         if (!(stage_cur++ % stats_update_freq)) show_stats();
 
-	  }
+      }
 
       ck_free(path);
       close(fd);
@@ -6492,7 +7027,9 @@ static void fix_up_banner(u8* name) {
 /* Check if we're on TTY. */
 
 static void check_if_tty(void) {
+#ifndef USE_COLOR
   not_on_tty = 1;
+#endif
 }
 
 
@@ -6515,12 +7052,16 @@ static void usage(u8* argv0) {
 
        "  -i dir        - input directory with test cases\n"
        "  -o dir        - output directory for fuzzer findings\n"
-	   "  -D dir        - directory with DynamoRIO binaries (drrun, drconfig)\n"
-	   "  -t msec       - timeout for each run\n\n"
+       "  -t msec       - timeout for each run\n\n"
+
+       "Instrumentation type:\n\n"
+        "  -D dir        - directory with DynamoRIO binaries (drrun, drconfig)\n"
+        "  -Y            - enable the static instrumentation mode\n\n"
 
        "Execution control settings:\n\n"
 
        "  -f file       - location read by the fuzzed program (stdin)\n"
+       "  -c cpu        - the CPU to run the fuzzed program\n\n"
  
        "Fuzzing behavior settings:\n\n"
 
@@ -6529,8 +7070,10 @@ static void usage(u8* argv0) {
 
        "Other stuff:\n\n"
 
+       "  -I msec       - timeout for process initialization and first run\n"
        "  -T text       - text banner to show on the screen\n"
        "  -M \\ -S id    - distributed mode (see parallel_fuzzing.txt)\n"
+       "  -l path       - a path to user-defined DLL for custom test cases processing\n\n"
 
        "For additional tips, please consult %s\\README.\n\n",
 
@@ -6651,6 +7194,14 @@ static void setup_dirs_fds(void) {
                      "unique_hangs, max_depth, execs_per_sec\n");
                      /* ignore errors */
 
+  tmp = alloc_printf("%s\\drcache", out_dir);
+  if (mkdir(tmp)) PFATAL("Unable to create '%s'", tmp);
+  ck_free(tmp);
+
+  tmp = alloc_printf("%s\\ptmodules", out_dir);
+  if (mkdir(tmp)) PFATAL("Unable to create '%s'", tmp);
+  ck_free(tmp);
+
 }
 
 
@@ -6690,7 +7241,7 @@ static void check_crash_handling(void) {
        "    external crash reporting utility. This will cause issues due to the\n"
        "    extended delay between the fuzzed binary malfunctioning and this fact\n"
        "    being relayed to the fuzzer via the standard waitpid() API.\n\n"
-       "    To avoid having crashes misinterpreted as hangs, please run the\n" 
+       "    To avoid having crashes misinterpreted as timeouts, please run the\n"
        "    following commands:\n\n"
 
        "    SL=\\System\\Library; PL=com.apple.ReportCrash\n"
@@ -6720,7 +7271,7 @@ static void check_crash_handling(void) {
          "    between the fuzzed binary malfunctioning and this information being\n"
          "    eventually relayed to the fuzzer via the standard waitpid() API.\n\n"
 
-         "    To avoid having crashes misinterpreted as hangs, please log in as root\n" 
+         "    To avoid having crashes misinterpreted as timeouts, please log in as root\n"
          "    and temporarily modify \\proc\\sys\\kernel\\core_pattern, like so:\n\n"
 
          "    echo core >\\proc\\sys\\kernel\\core_pattern\n");
@@ -6819,20 +7370,13 @@ static void get_core_count(void) {
 #endif /* ^__APPLE__ */
 
 #else
-
   /* On Linux, a simple way is to look at /proc/stat, especially since we'd
      be parsing it anyway for other reasons later on. */
 
-  FILE* f = fopen("\\proc\\stat", "r");
-  u8 tmp[1024];
+  SYSTEM_INFO sys_info = { 0 };
+  GetSystemInfo(&sys_info);
+  cpu_core_count = sys_info.dwNumberOfProcessors;
 
-  if (!f) return;
-
-  while (fgets(tmp, sizeof(tmp), f))
-    if (!strncmp(tmp, "cpu", 3) && isdigit(tmp[3])) cpu_core_count++;
-
-  fclose(f);
-  
 #endif /* ^(__APPLE__ || __FreeBSD__ || __OpenBSD__) */
 
   if (cpu_core_count) {
@@ -7135,6 +7679,35 @@ int getopt(int argc, char **argv, char *optstring) {
   }
 }
 
+/* This routine is designed to load user-defined library for custom test cases processing */
+void load_custom_library(const char *libname)
+{
+  int result = 0;
+  SAYF("Loading custom winAFL server library\n");
+  HMODULE hLib = LoadLibraryA(libname);
+  if (hLib == NULL)
+    FATAL("Unable to load custom server library, GetLastError = 0x%x", GetLastError());
+
+  /* init the custom server */
+  // Get pointer to user-defined server initialization function using GetProcAddress:
+  dll_init_ptr = (dll_init)GetProcAddress(hLib, "dll_init");
+  SAYF("dll_init %s defined.\n", dll_init_ptr ? "is" : "isn't");
+
+  // Get pointer to user-defined test cases sending function using GetProcAddress:
+  dll_run_ptr = (dll_run)GetProcAddress(hLib, "dll_run");
+  SAYF("dll_run_ptr %s defined.\n", dll_run_ptr ? "is" : "isn't");
+
+  // Get pointer to user-defined run_target function using GetProcAddress:
+  dll_run_target_ptr = (dll_run_target)GetProcAddress(hLib, "dll_run_target");
+  SAYF("dll_run_target %s defined.\n", dll_run_target_ptr ? "is" : "isn't");
+
+  // Get pointer to user-defined write_to_testcase function using GetProcAddress:
+  dll_write_to_testcase_ptr = (dll_write_to_testcase)GetProcAddress(hLib, "dll_write_to_testcase");
+  SAYF("dll_write_to_testcase %s defined.\n", dll_write_to_testcase_ptr ? "is" : "isn't");
+
+  SAYF("Sucessfully loaded and initalized\n");
+}
+
 /* Main entry point */
 int main(int argc, char** argv) {
 
@@ -7148,6 +7721,10 @@ int main(int argc, char** argv) {
 
   setup_watchdog_timer();
 
+#ifdef USE_COLOR
+  enable_ansi_console();
+#endif
+
   SAYF("WinAFL " WINAFL_VERSION " by <ifratric@google.com>\n");
   SAYF("Based on AFL " cBRI VERSION cRST " by <lcamtuf@google.com>\n");
 
@@ -7160,10 +7737,9 @@ int main(int argc, char** argv) {
   dynamorio_dir = NULL;
   client_params = NULL;
 
-  while ((opt = getopt(argc, argv, "+i:o:f:m:t:T:dnCB:S:M:x:QD:b:")) > 0)
+  while ((opt = getopt(argc, argv, "+i:o:f:m:t:I:T:dYnCB:S:M:x:QD:b:l:pPc:")) > 0)
 
     switch (opt) {
-
       case 'i':
 
         if (in_dir) FATAL("Multiple -i options not supported");
@@ -7185,16 +7761,33 @@ int main(int argc, char** argv) {
         dynamorio_dir = optarg;
         break;
 
-      case 'M':
+      case 'M': { /* master sync ID */
 
-        force_deterministic = 1;
-        /* Fall through */
+          u8* c;
 
-      case 'S': /* sync ID */
+          if (sync_id) FATAL("Multiple -S or -M options not supported");
+          sync_id = optarg;
+
+          if ((c = strchr(sync_id, ':'))) {
+
+            *c = 0;
+
+            if (sscanf(c + 1, "%u/%u", &master_id, &master_max) != 2 ||
+                !master_id || !master_max || master_id > master_max ||
+                master_max > 1000000) FATAL("Bogus master ID passed to -M");
+
+          }
+
+          force_deterministic = 1;
+          fuzzer_id = sync_id;
+
+        }
+        break;
+
+      case 'S':
 
         if (sync_id) FATAL("Multiple -S or -M options not supported");
-        sync_id = optarg;
-        fuzzer_id = sync_id;
+        sync_id = ck_strdup(optarg);
         break;
 
       case 'f': /* target file */
@@ -7226,6 +7819,16 @@ int main(int argc, char** argv) {
 
       }
 
+	  case 'I': {
+
+		  if (sscanf(optarg, "%u", &init_tmout) < 1) FATAL("Bad syntax used for -I");
+
+		  if (init_tmout < 5) FATAL("Dangerously low value of -I");
+
+		  break;
+
+	  }
+
       case 'm': {
 
           u8 suffix = 'M';
@@ -7256,9 +7859,8 @@ int main(int argc, char** argv) {
 
           if (mem_limit < 5) FATAL("Dangerously low value of -m");
 
-        }
-
-        break;
+          break;
+      }
 
       case 'd':
 
@@ -7314,22 +7916,74 @@ int main(int argc, char** argv) {
 
         break;
 
+      case 'Y':
+
+        if (dynamorio_dir) FATAL("Dynamic-instrumentation via DRIO is uncompatible with static-instrumentation");
+        drioless = 1;
+
+        break;
+
+      case 'l':
+        custom_dll_defined = 1;
+        load_custom_library(optarg);
+
+        break;
+
+	  case 'p':
+		  persist_dr_cache = 1;
+
+		  break;
+
+	  case 'P':
+#ifdef INTELPT
+		  use_intelpt = 1;
+#else
+		  FATAL("afl-fuzz was not compiled with Intel PT support");
+#endif
+
+		  break;
+
+      case 'c':
+        if (cpu_aff) {
+          FATAL("Multiple -c options not supported");
+        }
+        else {
+          int cpunum = 0;
+
+          if (sscanf(optarg, "%d", &cpunum) < 1) FATAL("Bad syntax used for -c");
+
+          cpu_aff = 1ULL << cpunum;
+        }
+
+        break;
+
       default:
 
         usage(argv[0]);
 
     }
 
-  if (optind == argc || !in_dir || !out_dir || !dynamorio_dir || !timeout_given) usage(argv[0]);
+  if (!in_dir || !out_dir || !timeout_given || (!drioless && !dynamorio_dir && !use_intelpt)) usage(argv[0]);
 
-  extract_client_params(argc, argv);
-  optind++;
 
   setup_signal_handlers();
   check_asan_opts();
 
   if (sync_id) fix_up_sync();
 
+  if (use_intelpt) {
+#ifdef INTELPT
+	  char *modules_dir = alloc_printf("%s\\ptmodules", out_dir);
+	  int pt_options = pt_init(argc - optind, argv + optind, modules_dir);
+	  ck_free(modules_dir);
+	  if (!pt_options) usage(argv[0]);
+	  optind += pt_options;
+#endif
+  } else {
+	  extract_client_params(argc, argv);
+  }
+  optind++;
+  
   if (!strcmp(in_dir, out_dir))
     FATAL("Input and output directories can't be the same");
 
@@ -7342,7 +7996,7 @@ int main(int argc, char** argv) {
 
   if (getenv("AFL_NO_FORKSRV"))    no_forkserver    = 1;
   if (getenv("AFL_NO_CPU_RED"))    no_cpu_meter_red = 1;
-  if (getenv("AFL_NO_VAR_CHECK"))  no_var_check     = 1;
+  if (getenv("AFL_NO_ARITH"))      no_arith = 1;
   if (getenv("AFL_SHUFFLE_QUEUE")) shuffle_queue    = 1;
   if (getenv("AFL_NO_SINKHOLE"))   sinkhole_stds    = 0;
 
@@ -7356,11 +8010,24 @@ int main(int argc, char** argv) {
   check_if_tty();
 
   get_core_count();
+
+  bind_to_free_cpu();
+
   check_crash_handling();
   check_cpu_governor();
 
   setup_post();
-  setup_shm();
+
+  if (!in_bitmap) memset(virgin_bits, 255, MAP_SIZE);
+  memset(virgin_tmout, 255, MAP_SIZE);
+  memset(virgin_crash, 255, MAP_SIZE);
+
+  if (use_intelpt) {
+	  trace_bits = VirtualAlloc(0, MAP_SIZE, MEM_COMMIT, PAGE_READWRITE);
+  } else {
+	  setup_shm();
+  }
+  init_count_class16();
   child_handle = NULL;
   pipe_handle = NULL;
 
@@ -7397,7 +8064,7 @@ int main(int argc, char** argv) {
 
   seek_to = find_start_position();
 
-  write_stats_file(0, 0);
+  write_stats_file(0, 0, 0);
   save_auto();
 
   if (stop_soon) goto stop_fuzzing;
@@ -7465,7 +8132,7 @@ int main(int argc, char** argv) {
   if (queue_cur) show_stats();
 
   write_bitmap();
-  write_stats_file(0, 0);
+  write_stats_file(0, 0, 0);
   save_auto();
 
 stop_fuzzing:
