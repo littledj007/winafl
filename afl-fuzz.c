@@ -114,6 +114,7 @@ static u8  skip_deterministic,        /* Skip deterministic stages?       */
            use_intelpt = 0;           /* Running without DRIO?            */
            custom_dll_defined = 0;    /* Custom DLL path defined ?        */
            persist_dr_cache = 0;      /* Custom DLL path defined ?        */
+		   fuzz_script = 0;           /* Fuzzing script                   */
 
 static s32 out_fd,                    /* Persistent fd for out_file       */
            dev_urandom_fd = -1,       /* Persistent fd for /dev/urandom   */
@@ -301,7 +302,8 @@ enum {
   /* 13 */ STAGE_EXTRAS_UI,
   /* 14 */ STAGE_EXTRAS_AO,
   /* 15 */ STAGE_HAVOC,
-  /* 16 */ STAGE_SPLICE
+  /* 16 */ STAGE_SPLICE,
+  /* 17 */ STAGE_SCRIPT
 };
 
 /* Stage value types */
@@ -4443,9 +4445,10 @@ static void show_stats(void) {
        "  imported : " cRST "%-9s " bSTG bV "\n", tmp,
        sync_id ? DI(queued_imported) : (u8*)"n/a");
 
-  sprintf(tmp, "%s/%s, %s/%s",
+  sprintf(tmp, "%s/%s, %s/%s, %s/%s",
           DI(stage_finds[STAGE_HAVOC]), DI(stage_cycles[STAGE_HAVOC]),
-          DI(stage_finds[STAGE_SPLICE]), DI(stage_cycles[STAGE_SPLICE]));
+          DI(stage_finds[STAGE_SPLICE]), DI(stage_cycles[STAGE_SPLICE]),
+          DI(stage_finds[STAGE_SCRIPT]), DI(stage_cycles[STAGE_SCRIPT]));
 
   SAYF(bV bSTOP "       havoc : " cRST "%-37s " bSTG bV bSTOP, tmp);
 
@@ -5224,7 +5227,8 @@ static u8 fuzz_one(char** argv) {
 
   if (!dumb_mode && !queue_cur->trim_done) {
 
-    u8 res = trim_case(argv, queue_cur, in_buf);
+    //u8 res = trim_case(argv, queue_cur, in_buf);
+	u8 res = FAULT_NONE;
 
     if (res == FAULT_ERROR)
       FATAL("Unable to execute target application");
@@ -5253,6 +5257,9 @@ static u8 fuzz_one(char** argv) {
   /* Skip right away if -d is given, if we have done deterministic fuzzing on
      this entry ourselves (was_fuzzed), or if it has gone through deterministic
      testing in earlier, resumed runs (passed_det). */
+
+  if (fuzz_script)
+	goto script_stage;
 
   if (skip_deterministic || queue_cur->was_fuzzed || queue_cur->passed_det)
     goto havoc_stage;
@@ -6773,6 +6780,27 @@ retry_splicing:
 #endif /* !IGNORE_FINDS */
 
   ret_val = 0;
+  goto abandon_entry;
+
+script_stage:
+
+  stage_name = "script";
+  stage_short = "sc";
+  stage_cur = 0;
+  stage_max = 1;
+
+  stage_val_type = STAGE_VAL_NONE;
+
+  orig_hit_cnt = queued_paths + unique_crashes;
+
+  if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
+
+  new_hit_cnt = queued_paths + unique_crashes;
+
+  stage_finds[STAGE_SCRIPT] += new_hit_cnt - orig_hit_cnt;
+  stage_cycles[STAGE_SCRIPT] += stage_max;
+
+  ret_val = 0;
 
 abandon_entry:
 
@@ -7066,6 +7094,7 @@ static void usage(u8* argv0) {
        "Fuzzing behavior settings:\n\n"
 
        "  -d            - quick & dirty mode (skips deterministic steps)\n"
+	   "  -s            - script mode (use self-defined mutators)\n"
        "  -x dir        - optional fuzzer dictionary (see README)\n\n"
 
        "Other stuff:\n\n"
@@ -7737,7 +7766,7 @@ int main(int argc, char** argv) {
   dynamorio_dir = NULL;
   client_params = NULL;
 
-  while ((opt = getopt(argc, argv, "+i:o:f:m:t:I:T:dYnCB:S:M:x:QD:b:l:pPc:")) > 0)
+  while ((opt = getopt(argc, argv, "+i:o:f:m:t:I:T:dsYnCB:S:M:x:QD:b:l:pPc:")) > 0)
 
     switch (opt) {
       case 'i':
@@ -7868,6 +7897,12 @@ int main(int argc, char** argv) {
         skip_deterministic = 1;
         use_splicing = 1;
         break;
+
+	  case 's':
+
+		  if (fuzz_script) FATAL("Multiple -d options not supported");
+		  fuzz_script = 1;
+		  break;
 
       case 'B':
 
