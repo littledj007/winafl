@@ -325,7 +325,50 @@ enum {
   /* 05 */ FAULT_NOBITS
 };
 
+#define TAKESAMPE 1
+#define GETSCRIPT 2
+#define FINISH 4
+#define MUTATE 129
+#define SCRIPT_MAP_SIZE 1024000
 
+static char* script_shm = NULL;
+static char script_buf[SCRIPT_MAP_SIZE];
+
+u32 waitResult()
+{
+	char signal = script_shm[0];
+	while (signal != FINISH) {
+		Sleep(1);
+		signal = script_shm[0];
+	}
+
+	u32 len = *(u32*)(script_shm + 1);
+	if (len >= SCRIPT_MAP_SIZE)
+		return 0;
+	memcpy(script_buf, script_shm + 9, len);
+	script_buf[len] = 0;
+	return len;
+}
+
+u32 takeSampe()
+{
+	script_shm[0] = TAKESAMPE;
+	return waitResult();
+}
+
+u32 getScript(char* serial, u32 count)
+{	
+	memcpy(script_shm + 9, serial, count);
+	script_shm[0] = GETSCRIPT;
+	return waitResult();
+}
+
+u32 mutate(char* serial, u32 count)
+{	
+	memcpy(script_shm + 9, serial, count);
+	script_shm[0] = MUTATE;
+	return waitResult();
+}
 
 /* Get unix time in milliseconds */
 
@@ -1453,6 +1496,13 @@ static void setup_shm(void) {
 
   if (!trace_bits) PFATAL("shmat() failed");
 
+  // add shm for script generator
+  HANDLE shm = OpenFileMapping(FILE_MAP_ALL_ACCESS, FALSE, TEXT("shm"));
+  if(shm == NULL)
+	FATAL("Could not OpenFileMapping for script.\n");
+  script_shm = (char*)MapViewOfFile(shm, FILE_MAP_ALL_ACCESS, 0, 0, SCRIPT_MAP_SIZE);
+  if (script_shm == NULL)
+	FATAL("Could not MapViewOfFile for script.\n");
 }
 
 char* dlerror(){
@@ -6787,13 +6837,17 @@ script_stage:
   stage_name = "script";
   stage_short = "sc";
   stage_cur = 0;
-  stage_max = 1;
+  stage_max = 10000;
 
   stage_val_type = STAGE_VAL_NONE;
 
   orig_hit_cnt = queued_paths + unique_crashes;
 
-  if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
+  for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
+	  temp_len = mutate(out_buf, len);
+	  if (temp_len == 0) goto abandon_entry;
+	  if (common_fuzz_stuff(argv, script_buf, temp_len)) goto abandon_entry;
+  }
 
   new_hit_cnt = queued_paths + unique_crashes;
 
