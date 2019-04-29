@@ -328,7 +328,10 @@ enum {
 #define TAKESAMPE 1
 #define GETSCRIPT 2
 #define FINISH 4
-#define MUTATE 129
+#define MUTATE_RAND 129
+#define MUTATE_OP 130
+#define MUTATE_INPUT 131
+#define MUTATE_INSERT 132
 #define SCRIPT_MAP_SIZE 1024000
 
 static char* script_shm = NULL;
@@ -363,10 +366,10 @@ u32 getScript(char* serial, u32 count)
 	return waitResult();
 }
 
-u32 mutate(char* serial, u32 count)
+u32 mutate(char* serial, u32 count, char mut)
 {	
 	memcpy(script_shm + 9, serial, count);
-	script_shm[0] = MUTATE;
+	script_shm[0] = mut;
 	return waitResult();
 }
 
@@ -6834,17 +6837,17 @@ retry_splicing:
 
 script_stage:
 
-  stage_name = "script";
+  stage_name = "sc_op";
   stage_short = "sc";
   stage_cur = 0;
-  stage_max = 10000;
+  stage_max = 200;
 
   stage_val_type = STAGE_VAL_NONE;
 
   orig_hit_cnt = queued_paths + unique_crashes;
 
   for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
-	  temp_len = mutate(out_buf, len);
+	  temp_len = mutate(out_buf, len, MUTATE_OP);
 	  if (temp_len == 0) goto abandon_entry;
 	  if (common_fuzz_stuff(argv, script_buf, temp_len)) goto abandon_entry;
   }
@@ -6853,6 +6856,70 @@ script_stage:
 
   stage_finds[STAGE_SCRIPT] += new_hit_cnt - orig_hit_cnt;
   stage_cycles[STAGE_SCRIPT] += stage_max;
+
+
+  stage_name = "sc_input";
+  stage_short = "sc";
+  stage_cur = 0;
+  stage_max = 200;
+
+  stage_val_type = STAGE_VAL_NONE;
+
+  orig_hit_cnt = queued_paths + unique_crashes;
+
+  for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
+	  temp_len = mutate(out_buf, len, MUTATE_INPUT);
+	  if (temp_len == 0) goto abandon_entry;
+	  if (common_fuzz_stuff(argv, script_buf, temp_len)) goto abandon_entry;
+  }
+
+  new_hit_cnt = queued_paths + unique_crashes;
+
+  stage_finds[STAGE_SCRIPT] += new_hit_cnt - orig_hit_cnt;
+  stage_cycles[STAGE_SCRIPT] += stage_max;
+
+
+  stage_name = "sc_insert";
+  stage_short = "sc";
+  stage_cur = 0;
+  stage_max = 200;
+
+  stage_val_type = STAGE_VAL_NONE;
+
+  orig_hit_cnt = queued_paths + unique_crashes;
+
+  for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
+	  temp_len = mutate(out_buf, len, MUTATE_INSERT);
+	  if (temp_len == 0) goto abandon_entry;
+	  if (common_fuzz_stuff(argv, script_buf, temp_len)) goto abandon_entry;
+  }
+
+  new_hit_cnt = queued_paths + unique_crashes;
+
+  stage_finds[STAGE_SCRIPT] += new_hit_cnt - orig_hit_cnt;
+  stage_cycles[STAGE_SCRIPT] += stage_max;
+
+
+  stage_name = "sc_rand";
+  stage_short = "sc";
+  stage_cur = 0;
+  stage_max = 100;
+
+  stage_val_type = STAGE_VAL_NONE;
+
+  orig_hit_cnt = queued_paths + unique_crashes;
+
+  for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
+	  temp_len = mutate(out_buf, len, MUTATE_RAND);
+	  if (temp_len == 0) goto abandon_entry;
+	  if (common_fuzz_stuff(argv, script_buf, temp_len)) goto abandon_entry;
+  }
+
+  new_hit_cnt = queued_paths + unique_crashes;
+
+  stage_finds[STAGE_SCRIPT] += new_hit_cnt - orig_hit_cnt;
+  stage_cycles[STAGE_SCRIPT] += stage_max;
+
 
   ret_val = 0;
 
