@@ -1500,7 +1500,7 @@ static void setup_shm(void) {
   if (!trace_bits) PFATAL("shmat() failed");
 
   // add shm for script generator
-  HANDLE shm = OpenFileMapping(FILE_MAP_ALL_ACCESS, FALSE, TEXT("shm"));
+  HANDLE shm = OpenFileMapping(FILE_MAP_ALL_ACCESS, FALSE, TEXT("shm_fuzzilli_mutate_afl"));
   if(shm == NULL)
 	FATAL("Could not OpenFileMapping for script.\n");
   script_shm = (char*)MapViewOfFile(shm, FILE_MAP_ALL_ACCESS, 0, 0, SCRIPT_MAP_SIZE);
@@ -3394,7 +3394,8 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
     /* Try to calibrate inline; this also calls update_bitmap_score() when
        successful. */
 
-    res = calibrate_case(argv, queue_top, mem, queue_cycle - 1, 0);
+	if (!fuzz_script)
+		res = calibrate_case(argv, queue_top, mem, queue_cycle - 1, 0);
 
     if (res == FAULT_ERROR)
       FATAL("Unable to execute target application");
@@ -6840,7 +6841,7 @@ script_stage:
   stage_name = "sc_op";
   stage_short = "sc";
   stage_cur = 0;
-  stage_max = 200;
+  stage_max = 10;
 
   stage_val_type = STAGE_VAL_NONE;
 
@@ -6861,7 +6862,7 @@ script_stage:
   stage_name = "sc_input";
   stage_short = "sc";
   stage_cur = 0;
-  stage_max = 200;
+  stage_max = 10;
 
   stage_val_type = STAGE_VAL_NONE;
 
@@ -6882,7 +6883,7 @@ script_stage:
   stage_name = "sc_insert";
   stage_short = "sc";
   stage_cur = 0;
-  stage_max = 200;
+  stage_max = 10;
 
   stage_val_type = STAGE_VAL_NONE;
 
@@ -6903,7 +6904,7 @@ script_stage:
   stage_name = "sc_rand";
   stage_short = "sc";
   stage_cur = 0;
-  stage_max = 100;
+  stage_max = 10;
 
   stage_val_type = STAGE_VAL_NONE;
 
@@ -6920,11 +6921,9 @@ script_stage:
   stage_finds[STAGE_SCRIPT] += new_hit_cnt - orig_hit_cnt;
   stage_cycles[STAGE_SCRIPT] += stage_max;
 
-
   ret_val = 0;
 
 abandon_entry:
-
   splicing_with = -1;
 
   /* Update pending_not_fuzzed count if we made it through the calibration
