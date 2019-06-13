@@ -7904,7 +7904,7 @@ int main(int argc, char** argv) {
   dynamorio_dir = NULL;
   client_params = NULL;
 
-  while ((opt = getopt(argc, argv, "+i:o:f:m:t:I:T:dsYnCB:S:M:x:QD:b:l:pPc:")) > 0)
+  while ((opt = getopt(argc, argv, "+i:o:f:m:t:I:T:dsYynCB:S:M:x:QD:b:l:pPc:")) > 0)
 
     switch (opt) {
       case 'i':
@@ -8036,7 +8036,7 @@ int main(int argc, char** argv) {
         use_splicing = 1;
         break;
 
-	  case 's':
+	  case 's':// add by leafe
 
 		  if (fuzz_script) FATAL("Multiple -d options not supported");
 		  fuzz_script = 1;
@@ -8095,6 +8095,14 @@ int main(int argc, char** argv) {
         drioless = 1;
 
         break;
+
+	  case 'y': // add by leafe
+		  if (dynamorio_dir) FATAL("Dynamic-instrumentation via DRIO is uncompatible with -y");
+		  if (dumb_mode) FATAL("Multiple -y options not supported");
+		  dumb_mode = 3;
+		  drioless = 1;
+
+		  break;
 
       case 'l':
         custom_dll_defined = 1;
