@@ -1500,12 +1500,15 @@ static void setup_shm(void) {
   if (!trace_bits) PFATAL("shmat() failed");
 
   // add shm for script generator
-  HANDLE shm = OpenFileMapping(FILE_MAP_ALL_ACCESS, FALSE, TEXT("shm_fuzzilli_mutate_afl"));
-  if(shm == NULL)
-	FATAL("Could not OpenFileMapping for script.\n");
-  script_shm = (char*)MapViewOfFile(shm, FILE_MAP_ALL_ACCESS, 0, 0, SCRIPT_MAP_SIZE);
-  if (script_shm == NULL)
-	FATAL("Could not MapViewOfFile for script.\n");
+  if (fuzz_script)
+  {
+	  HANDLE shm = OpenFileMapping(FILE_MAP_ALL_ACCESS, FALSE, TEXT("shm_fuzzilli_mutate_afl"));
+	  if (shm == NULL)
+		  FATAL("Could not OpenFileMapping for script: %d\n", GetLastError());
+	  script_shm = (char*)MapViewOfFile(shm, FILE_MAP_ALL_ACCESS, 0, 0, SCRIPT_MAP_SIZE);
+	  if (script_shm == NULL)
+		  FATAL("Could not MapViewOfFile for script.\n");
+  }  
 }
 
 char* dlerror(){
@@ -2669,6 +2672,7 @@ static u8 run_target(char** argv, u32 timeout) {
 
   if(!is_child_running()) {
     destroy_target_process(0);
+	//ACTF("create_target_process ...");
     create_target_process(argv);
     fuzz_iterations_current = 0;
   }
@@ -2686,7 +2690,9 @@ static u8 run_target(char** argv, u32 timeout) {
 	  watchdog_timeout_time = get_cur_time() + timeout;
   }
   watchdog_enabled = 1;
+  //ACTF("ReadCommandFromPipe ...");
   result = ReadCommandFromPipe(timeout);
+  //ACTF("ReadCommandFromPipe %c", result);
   if (result == 'K')
   {
 	  //a workaround for first cycle in app persistent mode
@@ -2707,8 +2713,9 @@ static u8 run_target(char** argv, u32 timeout) {
   }
   WriteCommandToPipe('F');
 
+  //ACTF("ReadCommandFromPipe ...");
   result = ReadCommandFromPipe(timeout); //no need to check for "error(0)" since we are exiting anyway
-  //ACTF("result: '%c'", result);
+  //ACTF("ReadCommandFromPipe %c", result);
   MemoryBarrier();
   watchdog_enabled = 0;
 
@@ -2729,6 +2736,13 @@ static u8 run_target(char** argv, u32 timeout) {
   if (result == 'C') {
 	  destroy_target_process(2000);
 	  return FAULT_CRASH;
+  }
+
+  if (result == 'D')
+  {
+	  __asm {
+		int 3
+	  }
   }
 
   destroy_target_process(0);
@@ -2840,7 +2854,9 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
 
     write_to_testcase(use_mem, q->len);
 
+	//ACTF("run_target ...");
     fault = run_target(argv, use_tmout);
+	//ACTF("run_target done");
 
     /* stop_soon is set by the handler for Ctrl+C. When it's pressed,
        we want to bail out quickly. */
@@ -2853,7 +2869,7 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
     }
 
     cksum = hash32(trace_bits, MAP_SIZE, HASH_CONST);
-
+	//printf("%08X != %08X\n", q->exec_cksum , cksum);
     if (q->exec_cksum != cksum) {
 
       u8 hnb = has_new_bits(virgin_bits);
@@ -2861,13 +2877,13 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
 
       if (q->exec_cksum) {
 
-        u32 i;
-
-        for (i = 0; i < MAP_SIZE; i++)
-          if (!var_bytes[i] && first_trace[i] != trace_bits[i]) {
-            var_bytes[i] = 1;
-            stage_max    = CAL_CYCLES_LONG;
-          }
+        //u32 i;
+		//
+        //for (i = 0; i < MAP_SIZE; i++)
+        //  if (!var_bytes[i] && first_trace[i] != trace_bits[i]) {
+        //    var_bytes[i] = 1;
+        //    stage_max    = CAL_CYCLES_LONG;
+        //  }
 
         var_detected = 1;
 
@@ -2982,8 +2998,10 @@ static void perform_dry_run(char** argv) {
 
     close(fd);
 
+	//ACTF("calibrate_case '%s'...", fn);
     res = calibrate_case(argv, q, use_mem, 0, 1);
     ck_free(use_mem);
+	//ACTF("calibrate_case done");
 
     if (stop_soon) return;
 
