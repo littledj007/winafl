@@ -2535,15 +2535,15 @@ DWORD WINAPI watchdog_timer( LPVOID lpParam ) {
 
 char ReadCommandFromPipe(u32 timeout)
 {
-	DWORD num_read;
 	char result = 0;
 	if (!is_child_running())
 	{
 		return 0;
 	}
 
-	if (ReadFile(pipe_handle, &result, 1, &num_read, &pipe_overlapped) || GetLastError() == ERROR_IO_PENDING)
+	if (ReadFile(pipe_handle, &result, 1, NULL, &pipe_overlapped) || GetLastError() == ERROR_IO_PENDING)
 	{
+		//ACTF("read from pipe '%d'", num_read);
 		//ACTF("ReadFile success or GLE IO_PENDING", result);
 		if (WaitForSingleObject(pipe_overlapped.hEvent, timeout) != WAIT_OBJECT_0) {
 			// took longer than specified timeout or other error - cancel read
@@ -2551,9 +2551,10 @@ char ReadCommandFromPipe(u32 timeout)
 			WaitForSingleObject(pipe_overlapped.hEvent, INFINITE); //wait for cancelation to finish properly.
 			result = 0;
 		}
+		//ACTF("read from pipe '%d'", num_read);
 	}
 	//ACTF("ReadFile GLE %d", GetLastError());
-	//ACTF("read from pipe '%c'", result);
+	//ACTF("read from pipe  '%c'",result);
 	return result;
 }
 
@@ -2573,10 +2574,11 @@ static void setup_watchdog_timer() {
 static int is_child_running() {
   int ret;
 
+  //ACTF("child_handle = %d", child_handle);
   EnterCriticalSection(&critical_section);
   ret = (child_handle && (WaitForSingleObject(child_handle, 0 ) == WAIT_TIMEOUT));
   LeaveCriticalSection(&critical_section);
-
+  //ACTF("is_child_running = %d", ret);
   return ret;
 }
 
@@ -2692,7 +2694,7 @@ static u8 run_target(char** argv, u32 timeout) {
   watchdog_enabled = 1;
   //ACTF("ReadCommandFromPipe ...");
   result = ReadCommandFromPipe(timeout);
-  //ACTF("ReadCommandFromPipe %c", result);
+  //ACTF("ReadCommandFromPipe %c(%d)", result, result);
   if (result == 'K')
   {
 	  //a workaround for first cycle in app persistent mode
@@ -2711,11 +2713,12 @@ static u8 run_target(char** argv, u32 timeout) {
   {
 	  FATAL("Unexpected result from pipe! expected 'P', instead received '%c'\n", result);
   }
+  //ACTF("WriteCommandToPipe F");
   WriteCommandToPipe('F');
 
   //ACTF("ReadCommandFromPipe ...");
   result = ReadCommandFromPipe(timeout); //no need to check for "error(0)" since we are exiting anyway
-  //ACTF("ReadCommandFromPipe %c", result);
+  //ACTF("ReadCommandFromPipe %c(%d)", result, result);
   MemoryBarrier();
   watchdog_enabled = 0;
 
@@ -2856,7 +2859,7 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
 
 	//ACTF("run_target ...");
     fault = run_target(argv, use_tmout);
-	//ACTF("run_target done");
+	//ACTF("run_target done, bits count: %d", count_bytes(trace_bits));
 
     /* stop_soon is set by the handler for Ctrl+C. When it's pressed,
        we want to bail out quickly. */
@@ -2869,7 +2872,7 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
     }
 
     cksum = hash32(trace_bits, MAP_SIZE, HASH_CONST);
-	//printf("%08X != %08X\n", q->exec_cksum , cksum);
+	//printf("%08X ?= %08X\n", q->exec_cksum , cksum);
     if (q->exec_cksum != cksum) {
 
       u8 hnb = has_new_bits(virgin_bits);
