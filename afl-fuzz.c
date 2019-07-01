@@ -353,21 +353,9 @@ u32 waitResult()
 	return len;
 }
 
-u32 takeSampe()
-{
-	script_shm[0] = TAKESAMPE;
-	return waitResult();
-}
-
-u32 getScript(char* serial, u32 count)
-{	
-	memcpy(script_shm + 9, serial, count);
-	script_shm[0] = GETSCRIPT;
-	return waitResult();
-}
-
 u32 mutate(char* serial, u32 count, char mut)
 {	
+	*(u32*)(script_shm + 1) = count;
 	memcpy(script_shm + 9, serial, count);
 	script_shm[0] = mut;
 	return waitResult();
@@ -6858,7 +6846,7 @@ retry_splicing:
   goto abandon_entry;
 
 script_stage:
-
+  /*
   stage_name = "sc_op";
   stage_short = "sc";
   stage_cur = 0;
@@ -6920,12 +6908,12 @@ script_stage:
 
   stage_finds[STAGE_SCRIPT] += new_hit_cnt - orig_hit_cnt;
   stage_cycles[STAGE_SCRIPT] += stage_max;
-
+  */
 
   stage_name = "sc_rand";
   stage_short = "sc";
   stage_cur = 0;
-  stage_max = 10;
+  stage_max = 10000;
 
   stage_val_type = STAGE_VAL_NONE;
 
