@@ -1,0 +1,251 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Win32">
+      <Configuration>Debug</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="MinSizeRel|Win32">
+      <Configuration>MinSizeRel</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="RelWithDebInfo|Win32">
+      <Configuration>RelWithDebInfo</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{9CC5139B-1CD2-30B1-9057-469E2DD00780}</ProjectGuid>
+    <WindowsTargetPlatformVersion>10.0.17763.0</WindowsTargetPlatformVersion>
+    <Keyword>Win32Proj</Keyword>
+    <Platform>Win32</Platform>
+    <ProjectName>ALL_BUILD</ProjectName>
+    <VCProjectUpgraderObjectName>NoUpgrade</VCProjectUpgraderObjectName>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v141</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v141</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|Win32'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v141</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|Win32'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v141</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <_ProjectFileVersion>10.0.20506.1</_ProjectFileVersion>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|Win32'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|Win32'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <Midl>
+      <AdditionalIncludeDirectories>E:\tools\DynamoRIO-Windows-7.1.0-1\cmake\..\include;E:\tools\DynamoRIO-Windows-7.1.0-1\cmake\..\ext\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <Midl>
+      <AdditionalIncludeDirectories>E:\tools\DynamoRIO-Windows-7.1.0-1\cmake\..\include;E:\tools\DynamoRIO-Windows-7.1.0-1\cmake\..\ext\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|Win32'">
+    <Midl>
+      <AdditionalIncludeDirectories>E:\tools\DynamoRIO-Windows-7.1.0-1\cmake\..\include;E:\tools\DynamoRIO-Windows-7.1.0-1\cmake\..\ext\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|Win32'">
+    <Midl>
+      <AdditionalIncludeDirectories>E:\tools\DynamoRIO-Windows-7.1.0-1\cmake\..\include;E:\tools\DynamoRIO-Windows-7.1.0-1\cmake\..\ext\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <CustomBuild Include="E:\src\winafl\CMakeLists.txt">
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Building Custom Rule E:/src/winafl/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SE:/src/winafl -BE:/src/winafl/build32 --check-stamp-file E:/src/winafl/build32/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">E:/src/winafl/CMakeLists.txt;C:\Program Files\CMake\share\cmake-3.14\Modules\CMakeCInformation.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\CMakeCXXInformation.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\CMakeCommonLanguageInclude.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\CMakeGenericSystem.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\CMakeInitializeConfigs.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\CMakeLanguageInformation.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\CMakeRCInformation.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\CMakeSystemSpecificInformation.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\CMakeSystemSpecificInitialize.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\Compiler\MSVC-C.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\Compiler\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\Platform\Windows-MSVC-C.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\Platform\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\Platform\Windows.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\Platform\WindowsPaths.cmake;E:\src\winafl\CMakeLists.txt;E:\src\winafl\build32\CMakeFiles\3.14.0-rc4\CMakeCCompiler.cmake;E:\src\winafl\build32\CMakeFiles\3.14.0-rc4\CMakeCXXCompiler.cmake;E:\src\winafl\build32\CMakeFiles\3.14.0-rc4\CMakeRCCompiler.cmake;E:\src\winafl\build32\CMakeFiles\3.14.0-rc4\CMakeSystem.cmake;E:\tools\DynamoRIO-Windows-7.1.0-1\cmake\DynamoRIOConfig.cmake;E:\tools\DynamoRIO-Windows-7.1.0-1\cmake\DynamoRIOConfigVersion.cmake;E:\tools\DynamoRIO-Windows-7.1.0-1\cmake\DynamoRIOTarget32-relwithdebinfo.cmake;E:\tools\DynamoRIO-Windows-7.1.0-1\cmake\DynamoRIOTarget32.cmake;E:\tools\DynamoRIO-Windows-7.1.0-1\drmemory\drmf\DRMFTarget32-debug.cmake;E:\tools\DynamoRIO-Windows-7.1.0-1\drmemory\drmf\DRMFTarget32-relwithdebinfo.cmake;E:\tools\DynamoRIO-Windows-7.1.0-1\drmemory\drmf\DRMFTarget32.cmake;E:\tools\DynamoRIO-Windows-7.1.0-1\drmemory\drmf\DrMemoryFrameworkConfig.cmake;E:\tools\DynamoRIO-Windows-7.1.0-1\drmemory\drmf\DrMemoryFrameworkConfigVersion.cmake;E:\src\winafl\CMakeLists.txt;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">E:\src\winafl\build32\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Building Custom Rule E:/src/winafl/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SE:/src/winafl -BE:/src/winafl/build32 --check-stamp-file E:/src/winafl/build32/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">E:/src/winafl/CMakeLists.txt;C:\Program Files\CMake\share\cmake-3.14\Modules\CMakeCInformation.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\CMakeCXXInformation.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\CMakeCommonLanguageInclude.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\CMakeGenericSystem.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\CMakeInitializeConfigs.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\CMakeLanguageInformation.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\CMakeRCInformation.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\CMakeSystemSpecificInformation.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\CMakeSystemSpecificInitialize.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\Compiler\MSVC-C.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\Compiler\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\Platform\Windows-MSVC-C.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\Platform\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\Platform\Windows.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\Platform\WindowsPaths.cmake;E:\src\winafl\CMakeLists.txt;E:\src\winafl\build32\CMakeFiles\3.14.0-rc4\CMakeCCompiler.cmake;E:\src\winafl\build32\CMakeFiles\3.14.0-rc4\CMakeCXXCompiler.cmake;E:\src\winafl\build32\CMakeFiles\3.14.0-rc4\CMakeRCCompiler.cmake;E:\src\winafl\build32\CMakeFiles\3.14.0-rc4\CMakeSystem.cmake;E:\tools\DynamoRIO-Windows-7.1.0-1\cmake\DynamoRIOConfig.cmake;E:\tools\DynamoRIO-Windows-7.1.0-1\cmake\DynamoRIOConfigVersion.cmake;E:\tools\DynamoRIO-Windows-7.1.0-1\cmake\DynamoRIOTarget32-relwithdebinfo.cmake;E:\tools\DynamoRIO-Windows-7.1.0-1\cmake\DynamoRIOTarget32.cmake;E:\tools\DynamoRIO-Windows-7.1.0-1\drmemory\drmf\DRMFTarget32-debug.cmake;E:\tools\DynamoRIO-Windows-7.1.0-1\drmemory\drmf\DRMFTarget32-relwithdebinfo.cmake;E:\tools\DynamoRIO-Windows-7.1.0-1\drmemory\drmf\DRMFTarget32.cmake;E:\tools\DynamoRIO-Windows-7.1.0-1\drmemory\drmf\DrMemoryFrameworkConfig.cmake;E:\tools\DynamoRIO-Windows-7.1.0-1\drmemory\drmf\DrMemoryFrameworkConfigVersion.cmake;E:\src\winafl\CMakeLists.txt;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">E:\src\winafl\build32\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|Win32'">Building Custom Rule E:/src/winafl/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|Win32'">setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SE:/src/winafl -BE:/src/winafl/build32 --check-stamp-file E:/src/winafl/build32/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|Win32'">E:/src/winafl/CMakeLists.txt;C:\Program Files\CMake\share\cmake-3.14\Modules\CMakeCInformation.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\CMakeCXXInformation.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\CMakeCommonLanguageInclude.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\CMakeGenericSystem.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\CMakeInitializeConfigs.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\CMakeLanguageInformation.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\CMakeRCInformation.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\CMakeSystemSpecificInformation.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\CMakeSystemSpecificInitialize.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\Compiler\MSVC-C.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\Compiler\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\Platform\Windows-MSVC-C.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\Platform\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\Platform\Windows.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\Platform\WindowsPaths.cmake;E:\src\winafl\CMakeLists.txt;E:\src\winafl\build32\CMakeFiles\3.14.0-rc4\CMakeCCompiler.cmake;E:\src\winafl\build32\CMakeFiles\3.14.0-rc4\CMakeCXXCompiler.cmake;E:\src\winafl\build32\CMakeFiles\3.14.0-rc4\CMakeRCCompiler.cmake;E:\src\winafl\build32\CMakeFiles\3.14.0-rc4\CMakeSystem.cmake;E:\tools\DynamoRIO-Windows-7.1.0-1\cmake\DynamoRIOConfig.cmake;E:\tools\DynamoRIO-Windows-7.1.0-1\cmake\DynamoRIOConfigVersion.cmake;E:\tools\DynamoRIO-Windows-7.1.0-1\cmake\DynamoRIOTarget32-relwithdebinfo.cmake;E:\tools\DynamoRIO-Windows-7.1.0-1\cmake\DynamoRIOTarget32.cmake;E:\tools\DynamoRIO-Windows-7.1.0-1\drmemory\drmf\DRMFTarget32-debug.cmake;E:\tools\DynamoRIO-Windows-7.1.0-1\drmemory\drmf\DRMFTarget32-relwithdebinfo.cmake;E:\tools\DynamoRIO-Windows-7.1.0-1\drmemory\drmf\DRMFTarget32.cmake;E:\tools\DynamoRIO-Windows-7.1.0-1\drmemory\drmf\DrMemoryFrameworkConfig.cmake;E:\tools\DynamoRIO-Windows-7.1.0-1\drmemory\drmf\DrMemoryFrameworkConfigVersion.cmake;E:\src\winafl\CMakeLists.txt;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|Win32'">E:\src\winafl\build32\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|Win32'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|Win32'">Building Custom Rule E:/src/winafl/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|Win32'">setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SE:/src/winafl -BE:/src/winafl/build32 --check-stamp-file E:/src/winafl/build32/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|Win32'">E:/src/winafl/CMakeLists.txt;C:\Program Files\CMake\share\cmake-3.14\Modules\CMakeCInformation.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\CMakeCXXInformation.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\CMakeCommonLanguageInclude.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\CMakeGenericSystem.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\CMakeInitializeConfigs.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\CMakeLanguageInformation.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\CMakeRCInformation.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\CMakeSystemSpecificInformation.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\CMakeSystemSpecificInitialize.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\Compiler\MSVC-C.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\Compiler\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\Platform\Windows-MSVC-C.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\Platform\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\Platform\Windows.cmake;C:\Program Files\CMake\share\cmake-3.14\Modules\Platform\WindowsPaths.cmake;E:\src\winafl\CMakeLists.txt;E:\src\winafl\build32\CMakeFiles\3.14.0-rc4\CMakeCCompiler.cmake;E:\src\winafl\build32\CMakeFiles\3.14.0-rc4\CMakeCXXCompiler.cmake;E:\src\winafl\build32\CMakeFiles\3.14.0-rc4\CMakeRCCompiler.cmake;E:\src\winafl\build32\CMakeFiles\3.14.0-rc4\CMakeSystem.cmake;E:\tools\DynamoRIO-Windows-7.1.0-1\cmake\DynamoRIOConfig.cmake;E:\tools\DynamoRIO-Windows-7.1.0-1\cmake\DynamoRIOConfigVersion.cmake;E:\tools\DynamoRIO-Windows-7.1.0-1\cmake\DynamoRIOTarget32-relwithdebinfo.cmake;E:\tools\DynamoRIO-Windows-7.1.0-1\cmake\DynamoRIOTarget32.cmake;E:\tools\DynamoRIO-Windows-7.1.0-1\drmemory\drmf\DRMFTarget32-debug.cmake;E:\tools\DynamoRIO-Windows-7.1.0-1\drmemory\drmf\DRMFTarget32-relwithdebinfo.cmake;E:\tools\DynamoRIO-Windows-7.1.0-1\drmemory\drmf\DRMFTarget32.cmake;E:\tools\DynamoRIO-Windows-7.1.0-1\drmemory\drmf\DrMemoryFrameworkConfig.cmake;E:\tools\DynamoRIO-Windows-7.1.0-1\drmemory\drmf\DrMemoryFrameworkConfigVersion.cmake;E:\src\winafl\CMakeLists.txt;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|Win32'">E:\src\winafl\build32\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|Win32'">false</LinkObjects>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="E:\src\winafl\build32\ZERO_CHECK.vcxproj">
+      <Project>{96AC0B81-393A-3B80-9609-2B2891F416E1}</Project>
+      <Name>ZERO_CHECK</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="E:\src\winafl\build32\afl-analyze.vcxproj">
+      <Project>{1DD53B1F-A7E5-38E3-8052-D63E540A7B49}</Project>
+      <Name>afl-analyze</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="E:\src\winafl\build32\afl-fuzz.vcxproj">
+      <Project>{F79D4830-C1F7-34D8-A3A7-B7EAC4FEB3F6}</Project>
+      <Name>afl-fuzz</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="E:\src\winafl\build32\afl-showmap.vcxproj">
+      <Project>{59EF30AB-748A-30EC-8E1A-578BFE7B9A65}</Project>
+      <Name>afl-showmap</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="E:\src\winafl\build32\afl-tmin.vcxproj">
+      <Project>{ECF5488E-C3B3-3C8F-9F50-459D845855B1}</Project>
+      <Name>afl-tmin</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="E:\src\winafl\build32\custom_net_fuzzer.vcxproj">
+      <Project>{FD8BC3E8-A8FC-3E5A-92B1-0C1CAFDF76E5}</Project>
+      <Name>custom_net_fuzzer</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="E:\src\winafl\build32\custom_winafl_server.vcxproj">
+      <Project>{F83AD28B-A3D5-35C9-A87F-16BF28B429CF}</Project>
+      <Name>custom_winafl_server</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="E:\src\winafl\build32\third_party\processor-trace\libipt\libipt.vcxproj">
+      <Project>{F9292CC2-71E4-3548-96D7-6412994A8BA0}</Project>
+      <Name>libipt</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="E:\src\winafl\build32\test.vcxproj">
+      <Project>{2C373447-DF12-3623-A6A4-F3F8ECF56F47}</Project>
+      <Name>test</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="E:\src\winafl\build32\test_gdiplus.vcxproj">
+      <Project>{9373301C-8990-3CF8-A20F-2B9A11AE90E5}</Project>
+      <Name>test_gdiplus</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="E:\src\winafl\build32\test_netmode.vcxproj">
+      <Project>{CAE92184-8D4C-3211-B3C3-BE686CFAA568}</Project>
+      <Name>test_netmode</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="E:\src\winafl\build32\test_servermode.vcxproj">
+      <Project>{D5E57B43-A5BD-3F5C-90D0-E580FEE00805}</Project>
+      <Name>test_servermode</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="E:\src\winafl\build32\test_static.vcxproj">
+      <Project>{759CFF42-EADD-3A5C-9EF9-A778C90C6679}</Project>
+      <Name>test_static</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="E:\src\winafl\build32\winafl.vcxproj">
+      <Project>{2C0FDDEA-4648-3071-A226-80AC62BD4DFE}</Project>
+      <Name>winafl</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>
